@@ -28,7 +28,6 @@ class BenchAuthor(ormpi.Model):
     age = IntegerField(null=True)
 
     class Meta:
-        app_label = "bench"
         db_table = "bench_authors"
 
 
@@ -57,7 +56,7 @@ def populated_db(bench_loop):
 
     async def setup():
         await ormpi.configure({"default": {"ENGINE": "sqlite", "NAME": ":memory:"}})
-        await create_table("bench.BenchAuthor")
+        await create_table("BenchAuthor")
         rows = [
             BenchAuthor(name=f"A{i}", email=f"a{i}@bench.com", age=i % 80)
             for i in range(1000)
@@ -81,7 +80,7 @@ def test_bulk_insert_1000(benchmark):
     def do_bulk():
         async def _inner():
             await ormpi.configure({"default": {"ENGINE": "sqlite", "NAME": ":memory:"}})
-            await create_table("bench.BenchAuthor")
+            await create_table("BenchAuthor")
             rows = [BenchAuthor(name=f"B{i}", email=f"b{i}@bench.com") for i in range(1000)]
             count = await BenchAuthor.objects.bulk_create(rows)
             assert count == 1000
@@ -113,7 +112,7 @@ def test_single_insert(benchmark):
 
 async def _setup_empty():
     await ormpi.configure({"default": {"ENGINE": "sqlite", "NAME": ":memory:"}})
-    await create_table("bench.BenchAuthor")
+    await create_table("BenchAuthor")
 
 
 # ---------------------------------------------------------------------------

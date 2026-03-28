@@ -164,7 +164,6 @@ mod tests {
             db_column: None,
             field_type: ft,
             null: false,
-            blank: false,
             unique: false,
             primary_key: false,
             db_index: false,
@@ -175,7 +174,6 @@ mod tests {
             auto_now_add: false,
             max_length: None,
             validators: vec![],
-            help_text: String::new(),
             verbose_name: None,
             related_name: None,
         }

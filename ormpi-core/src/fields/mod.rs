@@ -12,7 +12,6 @@ pub struct FieldDef {
     pub db_column: Option<String>, // explicit override
     pub field_type: FieldType,
     pub null: bool,
-    pub blank: bool,
     pub default: DefaultValue,
     pub unique: bool,
     pub db_index: bool,
@@ -23,7 +22,6 @@ pub struct FieldDef {
     pub auto_now_add: bool,
     pub max_length: Option<u32>,
     pub validators: Vec<BuiltinValidator>,
-    pub help_text: String,
     pub verbose_name: Option<String>,
     pub related_name: Option<String>,
 }
@@ -182,7 +180,6 @@ mod tests {
             db_column: None,
             field_type: ft,
             null: false,
-            blank: false,
             default: DefaultValue::None,
             unique: false,
             db_index: false,
@@ -193,7 +190,6 @@ mod tests {
             auto_now_add: false,
             max_length: None,
             validators: vec![],
-            help_text: String::new(),
             verbose_name: None,
             related_name: None,
         }

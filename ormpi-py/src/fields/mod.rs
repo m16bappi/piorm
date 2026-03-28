@@ -114,11 +114,6 @@ macro_rules! impl_field_common {
             }
 
             #[getter]
-            fn blank(&self) -> bool {
-                self.inner.blank
-            }
-
-            #[getter]
             fn unique(&self) -> bool {
                 self.inner.unique
             }
@@ -152,28 +147,24 @@ macro_rules! impl_simple_field {
             #[pyo3(signature = (
                 *,
                 null = false,
-                blank = false,
                 default = None,
                 unique = false,
                 db_index = false,
                 primary_key = false,
                 editable = true,
                 db_column = None,
-                help_text = "",
                 verbose_name = None,
             ))]
             #[allow(clippy::too_many_arguments)]
             fn new(
                 py: pyo3::Python<'_>,
                 null: bool,
-                blank: bool,
                 default: Option<pyo3::PyObject>,
                 unique: bool,
                 db_index: bool,
                 primary_key: bool,
                 editable: bool,
                 db_column: Option<String>,
-                help_text: &str,
                 verbose_name: Option<String>,
             ) -> pyo3::PyResult<Self> {
                 Ok(Self {
@@ -183,7 +174,6 @@ macro_rules! impl_simple_field {
                         db_column,
                         field_type: $field_type_expr,
                         null,
-                        blank,
                         unique,
                         db_index,
                         primary_key,
@@ -194,7 +184,6 @@ macro_rules! impl_simple_field {
                         auto_now_add: false,
                         max_length: None,
                         validators: vec![],
-                        help_text: help_text.to_string(),
                         verbose_name,
                         related_name: None,
                     },

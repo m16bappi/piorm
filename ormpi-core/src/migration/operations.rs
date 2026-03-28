@@ -57,7 +57,7 @@ fn build_temp_model_def(
     let table_name = options
         .db_table
         .clone()
-        .unwrap_or_else(|| ModelDef::default_table_name(app_label, model_name));
+        .unwrap_or_else(|| ModelDef::default_table_name(model_name));
 
     let mut field_map: IndexMap<String, FieldDef> = IndexMap::new();
     for f in fields {
@@ -126,17 +126,13 @@ impl From<&FieldDef> for StoredField {
             attname: Some(fd.attname.clone()),
             field_type_str: fd.field_type.to_type_str(),
             null: fd.null,
-            blank: fd.blank,
+            blank: false,
             unique: fd.unique,
             primary_key: fd.primary_key,
             db_index: fd.db_index,
             editable: fd.editable,
             max_length: fd.max_length,
-            help_text: if fd.help_text.is_empty() {
-                None
-            } else {
-                Some(fd.help_text.clone())
-            },
+            help_text: None,
         }
     }
 }
@@ -155,7 +151,6 @@ impl StoredField {
             db_column: None,
             field_type,
             null: self.null,
-            blank: self.blank,
             unique: self.unique,
             primary_key: self.primary_key,
             db_index: self.db_index,
@@ -166,7 +161,6 @@ impl StoredField {
             auto_now_add: false,
             max_length: self.max_length,
             validators: vec![],
-            help_text: self.help_text.clone().unwrap_or_default(),
             verbose_name: None,
             related_name: None,
         }
@@ -237,7 +231,7 @@ impl MigrationOperation for CreateModelOp {
 
     fn database_backwards(&self, backend: &QueryBackend) -> Vec<String> {
         let table_name = self.options.db_table.clone()
-            .unwrap_or_else(|| ModelDef::default_table_name(&self.app_label, &self.name));
+            .unwrap_or_else(|| ModelDef::default_table_name(&self.name));
         let stmt = sea_query::Table::drop()
             .table(sea_query::Alias::new(&table_name))
             .if_exists()
@@ -304,7 +298,7 @@ impl MigrationOperation for DeleteModelOp {
 
     fn database_forwards(&self, backend: &QueryBackend) -> Vec<String> {
         let table_name = self.options.db_table.clone()
-            .unwrap_or_else(|| ModelDef::default_table_name(&self.app_label, &self.name));
+            .unwrap_or_else(|| ModelDef::default_table_name(&self.name));
         let stmt = sea_query::Table::drop()
             .table(sea_query::Alias::new(&table_name))
             .if_exists()

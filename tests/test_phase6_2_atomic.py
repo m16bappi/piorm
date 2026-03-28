@@ -24,14 +24,13 @@ class Post62(ormpi.Model):
     score = IntegerField(default=0)
 
     class Meta:
-        app_label = "tests62"
         db_table = "posts62"
 
 
 @pytest.fixture(autouse=True)
 async def setup_db():
     await ormpi.configure({"default": {"ENGINE": "sqlite", "NAME": ":memory:"}})
-    await create_table("tests62.Post62")
+    await create_table("Post62")
 
 
 # ── commit on clean exit ──────────────────────────────────────────────────────

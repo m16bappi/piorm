@@ -23,14 +23,13 @@ class Item61(ormpi.Model):
     value = IntegerField(default=0)
 
     class Meta:
-        app_label = "tests61"
         db_table = "items61"
 
 
 @pytest.fixture(autouse=True)
 async def setup_db():
     await ormpi.configure({"default": {"ENGINE": "sqlite", "NAME": ":memory:"}})
-    await create_table("tests61.Item61")
+    await create_table("Item61")
 
 
 # ── begin / is_open ───────────────────────────────────────────────────────────

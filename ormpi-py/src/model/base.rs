@@ -365,7 +365,6 @@ pub fn _register_model_class(cls: Bound<'_, PyType>) -> PyResult<()> {
                 field_type: FieldType::AutoBigInt,
                 primary_key: true,
                 null: false,
-                blank: false,
                 unique: false,
                 db_index: false,
                 editable: false,
@@ -375,7 +374,6 @@ pub fn _register_model_class(cls: Bound<'_, PyType>) -> PyResult<()> {
                 auto_now_add: false,
                 max_length: None,
                 validators: vec![],
-                help_text: String::new(),
                 verbose_name: Some("ID".to_string()),
                 related_name: None,
             },
@@ -386,7 +384,7 @@ pub fn _register_model_class(cls: Bound<'_, PyType>) -> PyResult<()> {
 
     let (app_label, db_table, ordering) = parse_meta(&cls)?;
     let table_name =
-        db_table.unwrap_or_else(|| ModelDef::default_table_name(&app_label, &class_name));
+        db_table.unwrap_or_else(|| ModelDef::default_table_name(&class_name));
 
     // ── Build and register ModelDef ───────────────────────────────────────
 
@@ -505,11 +503,8 @@ fn build_m2m_def(field_def: &FieldDef, from_model: &str) -> PyResult<M2MFieldDef
 fn parse_meta(cls: &Bound<'_, PyType>) -> PyResult<(String, Option<String>, Vec<OrderSpec>)> {
     let meta = cls.getattr("Meta").ok();
 
-    let app_label = meta
-        .as_ref()
-        .and_then(|m| m.getattr("app_label").ok())
-        .and_then(|v| v.extract::<String>().ok())
-        .unwrap_or_else(|| infer_app_label(cls));
+    // app_label is always inferred from the module path; users may not set it.
+    let app_label = infer_app_label(cls);
 
     let db_table = meta
         .as_ref()

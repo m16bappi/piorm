@@ -22,7 +22,6 @@ class Author44(ormpi.Model):
     name = CharField(max_length=100)
 
     class Meta:
-        app_label = "tests44"
         db_table = "authors44"
 
 
@@ -32,15 +31,14 @@ class Article44(ormpi.Model):
     author = ForeignKey("Author44", on_delete=CASCADE, related_name="articles", null=True)
 
     class Meta:
-        app_label = "tests44"
         db_table = "articles44"
 
 
 @pytest.fixture(autouse=True)
 async def setup_db():
     await ormpi.configure({"default": {"ENGINE": "sqlite", "NAME": ":memory:"}})
-    await create_table("tests44.Author44")
-    await create_table("tests44.Article44")
+    await create_table("Author44")
+    await create_table("Article44")
     # Insert authors
     await execute_sql("INSERT INTO authors44 (name) VALUES ('Alice')")
     await execute_sql("INSERT INTO authors44 (name) VALUES ('Bob')")

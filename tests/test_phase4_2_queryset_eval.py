@@ -24,7 +24,6 @@ class Article(ormpi.Model):
     views = IntegerField(default=0)
 
     class Meta:
-        app_label = "tests"
         db_table = "articles"
 
 
@@ -32,7 +31,7 @@ class Article(ormpi.Model):
 async def setup_db():
     await ormpi.configure({"default": {"ENGINE": "sqlite", "NAME": ":memory:"}})
     # Create the articles table via the model registry (generates correct DDL).
-    await create_table("tests.Article")
+    await create_table("Article")
     # Seed three rows using execute_sql (which handles DML without expecting rows back).
     await execute_sql("INSERT INTO articles (title, views) VALUES ('Alpha', 10)")
     await execute_sql("INSERT INTO articles (title, views) VALUES ('Beta', 20)")

@@ -21,7 +21,6 @@ class Author52(ormpi.Model):
     name = CharField(max_length=100)
 
     class Meta:
-        app_label = "tests52"
         db_table = "authors52"
 
 
@@ -30,7 +29,6 @@ class Article52(ormpi.Model):
     author = ForeignKey("Author52", on_delete=CASCADE, null=True)
 
     class Meta:
-        app_label = "tests52"
         db_table = "articles52"
 
 
@@ -79,8 +77,8 @@ async def setup_two_pools():
         "replica": {"ENGINE": "sqlite", "NAME": ":memory:"},
     })
     for alias in ("default", "replica"):
-        await create_table("tests52.Author52", alias)
-        await create_table("tests52.Article52", alias)
+        await create_table("Author52", alias)
+        await create_table("Article52", alias)
 
 
 # ── Tests: empty router / fallback ────────────────────────────────────────────
@@ -89,7 +87,7 @@ async def setup_two_pools():
 async def test_no_routers_uses_default():
     """No router list → reads/writes go to 'default'."""
     await ormpi.configure({"default": {"ENGINE": "sqlite", "NAME": ":memory:"}})
-    await create_table("tests52.Author52")
+    await create_table("Author52")
     await execute_sql("INSERT INTO authors52 (name) VALUES ('Alice')")
     authors = await Author52.objects.all()
     assert len(authors) == 1
@@ -101,7 +99,7 @@ async def test_null_router_falls_back_to_default():
         {"default": {"ENGINE": "sqlite", "NAME": ":memory:"}},
         database_routers=[],
     )
-    await create_table("tests52.Author52")
+    await create_table("Author52")
     await execute_sql("INSERT INTO authors52 (name) VALUES ('Bob')")
     authors = await Author52.objects.all()
     assert len(authors) == 1
@@ -183,7 +181,7 @@ async def test_router_loaded_from_path():
         {"default": {"ENGINE": "sqlite", "NAME": ":memory:"}},
         database_routers=["routers_52.AlwaysDefaultRouter"],
     )
-    await create_table("tests52.Author52")
+    await create_table("Author52")
     await execute_sql("INSERT INTO authors52 (name) VALUES ('ViaPath')")
     authors = await Author52.objects.all()
     assert len(authors) == 1

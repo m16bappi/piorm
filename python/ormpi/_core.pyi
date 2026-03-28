@@ -213,12 +213,10 @@ class Field:
     name: str
     attname: str
     null: bool
-    blank: bool
     unique: bool
     primary_key: bool
     db_index: bool
     editable: bool
-    help_text: str
     def contribute_to_class(self, cls: type, name: str) -> None: ...
     def __get__(self, obj: Any, objtype: type | None = None) -> Any: ...
     def __set__(self, obj: Any, value: Any) -> None: ...
@@ -237,17 +235,15 @@ class IntegerField(Field):
         self,
         *,
         null: bool = False,
-        blank: bool = False,
         default: Any = ...,
         unique: bool = False,
         db_index: bool = False,
         primary_key: bool = False,
         db_column: str | None = None,
-        help_text: str = "",
     ) -> None: ...
 
 class BigIntegerField(Field):
-    def __init__(self, *, null: bool = False, blank: bool = False, **kwargs: Any) -> None: ...
+    def __init__(self, *, null: bool = False, **kwargs: Any) -> None: ...
 
 class SmallIntegerField(IntegerField): ...
 class PositiveIntegerField(IntegerField): ...
@@ -255,7 +251,7 @@ class PositiveBigIntegerField(IntegerField): ...
 class PositiveSmallIntegerField(IntegerField): ...
 
 class FloatField(Field):
-    def __init__(self, *, null: bool = False, blank: bool = False, **kwargs: Any) -> None: ...
+    def __init__(self, *, null: bool = False, **kwargs: Any) -> None: ...
 
 class DecimalField(Field):
     max_digits: int
@@ -266,7 +262,6 @@ class DecimalField(Field):
         decimal_places: int,
         *,
         null: bool = False,
-        blank: bool = False,
         **kwargs: Any,
     ) -> None: ...
 
@@ -277,13 +272,12 @@ class CharField(Field):
         max_length: int,
         *,
         null: bool = False,
-        blank: bool = False,
         choices: list[tuple[Any, str]] | None = None,
         **kwargs: Any,
     ) -> None: ...
 
 class TextField(Field):
-    def __init__(self, *, null: bool = False, blank: bool = False, **kwargs: Any) -> None: ...
+    def __init__(self, *, null: bool = False, **kwargs: Any) -> None: ...
 
 class SlugField(CharField): ...
 class EmailField(CharField): ...
@@ -346,7 +340,6 @@ class ForeignKey(Field):
         to_field: str | None = None,
         db_constraint: bool = True,
         null: bool = False,
-        blank: bool = False,
         db_index: bool = True,
         db_column: str | None = None,
     ) -> None: ...

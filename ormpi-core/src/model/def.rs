@@ -66,9 +66,17 @@ pub struct M2MFieldDef {
 }
 
 impl ModelDef {
-    /// Compute the default table name from app_label and model_name.
-    pub fn default_table_name(app_label: &str, model_name: &str) -> String {
-        format!("{}_{}", app_label, model_name.to_lowercase())
+    /// Compute the default table name from the model class name (PascalCase → snake_case).
+    /// e.g. `"ArticleComment"` → `"article_comment"`
+    pub fn default_table_name(model_name: &str) -> String {
+        let mut out = String::new();
+        for (i, ch) in model_name.chars().enumerate() {
+            if ch.is_uppercase() && i > 0 {
+                out.push('_');
+            }
+            out.push(ch.to_lowercase().next().unwrap());
+        }
+        out
     }
 
     /// Get the primary key FieldDef.
@@ -93,7 +101,6 @@ mod tests {
                 field_type: FieldType::AutoBigInt,
                 primary_key: true,
                 null: false,
-                blank: false,
                 unique: false,
                 db_index: false,
                 editable: false,
@@ -103,7 +110,6 @@ mod tests {
                 auto_now_add: false,
                 max_length: None,
                 validators: vec![],
-                help_text: String::new(),
                 verbose_name: Some("ID".to_string()),
                 related_name: None,
             },
@@ -111,7 +117,7 @@ mod tests {
         ModelDef {
             app_label: "blog".to_string(),
             model_name: "Article".to_string(),
-            table_name: "blog_article".to_string(),
+            table_name: "article".to_string(),
             fields,
             pk_field: "id".to_string(),
             ordering: vec![],
@@ -129,14 +135,9 @@ mod tests {
 
     #[test]
     fn test_default_table_name() {
-        assert_eq!(
-            ModelDef::default_table_name("blog", "Article"),
-            "blog_article"
-        );
-        assert_eq!(
-            ModelDef::default_table_name("myapp", "UserProfile"),
-            "myapp_userprofile"
-        );
+        assert_eq!(ModelDef::default_table_name("Article"), "article");
+        assert_eq!(ModelDef::default_table_name("UserProfile"), "user_profile");
+        assert_eq!(ModelDef::default_table_name("ArticleComment"), "article_comment");
     }
 
     #[test]

@@ -1,8 +1,7 @@
 """
 Shared fixtures and model definitions for integration tests.
 
-Models use unique app_label="int_test" and prefixed table names to avoid
-conflicts with the phase-based unit test models.
+Models use prefixed table names to avoid conflicts with the phase-based unit test models.
 """
 from __future__ import annotations
 
@@ -32,11 +31,10 @@ class IntAuthor(ormpi.Model):
     name = CharField(max_length=100)
     email = CharField(max_length=200)
     age = IntegerField(null=True)
-    bio = TextField(null=True, blank=True)
+    bio = TextField(null=True)
     active = BooleanField(default=True)
 
     class Meta:
-        app_label = "int_test"
         db_table = "int_authors"
 
 
@@ -58,7 +56,6 @@ class IntArticle(ormpi.Model):
     )
 
     class Meta:
-        app_label = "int_test"
         db_table = "int_articles"
 
 
@@ -104,7 +101,7 @@ async def db(request):
     """Configure a fresh database and create all integration test tables."""
     config = _db_config(request.param)
     await ormpi.configure(config)
-    await create_table("int_test.IntAuthor")
-    await create_table("int_test.IntArticle")
+    await create_table("IntAuthor")
+    await create_table("IntArticle")
     yield
     await ormpi.close()
