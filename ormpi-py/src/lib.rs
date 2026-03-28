@@ -82,13 +82,14 @@ fn get_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-/// configure(databases: dict, database_routers=None) -> Awaitable[None]
+/// configure(databases: dict, database_routers=None, auto_sync=False) -> Awaitable[None]
 #[pyfunction]
-#[pyo3(signature = (databases, database_routers = None))]
+#[pyo3(signature = (databases, database_routers = None, auto_sync = false))]
 fn configure(
     py: Python<'_>,
     databases: &Bound<'_, PyDict>,
     database_routers: Option<Vec<String>>,
+    auto_sync: bool,
 ) -> PyResult<PyObject> {
     let configs = parse_databases_dict(py, databases)?;
 
@@ -106,10 +107,75 @@ fn configure(
     };
     routing::set_routers(router_instances);
 
+    // Snapshot all registered model defs now (while GIL is held).
+    // Models imported after configure() is called will NOT be synced.
+    let all_defs: Vec<_> = if auto_sync {
+        let reg = ormpi_core::model::registry::ModelRegistry::global();
+        let guard = reg.read().unwrap();
+        guard.all().cloned().collect()
+    } else {
+        vec![]
+    };
+
     let future = async move {
+        // 1. Initialize connection pools.
         ormpi_core::registry::initialize(configs)
             .await
-            .map_err(ormpi_err)
+            .map_err(ormpi_err)?;
+
+        // 2. Optionally create all registered model tables (CREATE TABLE IF NOT EXISTS).
+        if auto_sync {
+            if all_defs.is_empty() {
+                Python::with_gil(|py| {
+                    let _ = py.run_bound(
+                        "import warnings; warnings.warn(\
+                            'auto_sync=True was set but no models are registered. \
+                            Import your models before calling configure().', \
+                            stacklevel=3\
+                        )",
+                        None,
+                        None,
+                    );
+                });
+            } else {
+                let registry = ormpi_core::registry::DatabaseRegistry::global();
+                let pool = {
+                    let guard = registry.read().unwrap();
+                    guard.get_pool("default").map_err(ormpi_err)?.clone()
+                };
+                let backend = ormpi_core::backend::QueryBackend(pool.backend());
+
+                for model_def in &all_defs {
+                    let ddl = ormpi_core::model::ddl::model_to_ddl(model_def, backend);
+
+                    ormpi_core::executor::execute_sql(&pool, &ddl.create_table)
+                        .await
+                        .map_err(ormpi_err)?;
+
+                    for sql in &ddl.create_indexes {
+                        ormpi_core::executor::execute_sql(&pool, sql)
+                            .await
+                            .map_err(ormpi_err)?;
+                    }
+
+                    for sql in &ddl.create_m2m_tables {
+                        ormpi_core::executor::execute_sql(&pool, sql)
+                            .await
+                            .map_err(ormpi_err)?;
+                    }
+
+                    for sql in &ddl.create_fk_constraints {
+                        if !sql.starts_with("--") {
+                            ormpi_core::executor::execute_sql(&pool, sql)
+                                .await
+                                .map_err(ormpi_err)?;
+                        }
+                    }
+                }
+            }
+        }
+
+        Python::with_gil(|py| Ok(py.None()))
     };
     pyo3_async_runtimes::tokio::future_into_py(py, future).map(|b| b.into())
 }
