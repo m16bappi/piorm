@@ -47,6 +47,8 @@ impl AutoDetector {
                 ops.push(Box::new(DeleteModelOp {
                     app_label: from_model.app_label.clone(),
                     name: from_model.name.clone(),
+                    fields: from_model.fields.values().map(|fs| fs.field_def.clone()).collect(),
+                    options: from_model.options.clone(),
                 }));
             }
         }
@@ -82,12 +84,13 @@ impl AutoDetector {
         }
 
         // Removed fields
-        for fname in from.fields.keys() {
+        for (fname, from_field) in &from.fields {
             if !to.fields.contains_key(fname) {
                 ops.push(Box::new(RemoveFieldOp {
                     app_label: to.app_label.clone(),
                     model: to.name.clone(),
                     name: fname.clone(),
+                    field: from_field.field_def.clone(),
                 }));
             }
         }

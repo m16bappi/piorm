@@ -6,7 +6,8 @@ use indexmap::IndexMap;
 use crate::fields::FieldDef;
 use crate::model::def::{ConstraintDef, IndexDef, ModelDef};
 use crate::model::registry::ModelRegistry;
-use super::operations::{MigrationFile, MigrationOperation};
+use super::file::MigrationFile;
+use super::operations::MigrationOperation;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -130,9 +131,7 @@ impl ProjectState {
 
         let mut state = ProjectState::default();
         for path in entries {
-            let content = std::fs::read_to_string(&path)
-                .map_err(|e| crate::OrmpiError::Other(e.to_string()))?;
-            let migration_file: MigrationFile = toml::from_str(&content)
+            let migration_file = MigrationFile::read_from_file(&path)
                 .map_err(|e| crate::OrmpiError::Other(e.to_string()))?;
             for stored_op in migration_file.operations {
                 let op: Box<dyn MigrationOperation> = stored_op.into_op();
@@ -230,15 +229,16 @@ mod tests {
 
     #[test]
     fn test_from_migrations_replays_create_and_add_field() {
-        use crate::migration::operations::{MigrationFile, StoredField, StoredModelOptions, StoredOperation};
+        use crate::migration::file::MigrationFile;
+        use crate::migration::operations::{StoredField, StoredModelOptions, StoredOperation};
 
         let dir = tempfile::tempdir().unwrap();
 
         // Migration 1: CreateModel Article with id field
-        let mig1 = MigrationFile {
-            name: "0001_initial".to_string(),
-            dependencies: vec![],
-            operations: vec![StoredOperation::CreateModel {
+        let mig1 = MigrationFile::new(
+            "0001_initial",
+            vec![],
+            vec![StoredOperation::CreateModel {
                 app_label: "blog".to_string(),
                 name: "Article".to_string(),
                 fields: vec![StoredField {
@@ -256,13 +256,13 @@ mod tests {
                 }],
                 options: StoredModelOptions { managed: true, ..Default::default() },
             }],
-        };
+        );
 
         // Migration 2: AddField title to Article
-        let mig2 = MigrationFile {
-            name: "0002_add_title".to_string(),
-            dependencies: vec!["0001_initial".to_string()],
-            operations: vec![StoredOperation::AddField {
+        let mig2 = MigrationFile::new(
+            "0002_add_title",
+            vec!["0001_initial".to_string()],
+            vec![StoredOperation::AddField {
                 app_label: "blog".to_string(),
                 model: "Article".to_string(),
                 field: StoredField {
@@ -279,18 +279,10 @@ mod tests {
                     help_text: None,
                 },
             }],
-        };
+        );
 
-        std::fs::write(
-            dir.path().join("0001_initial.toml"),
-            toml::to_string(&mig1).unwrap(),
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("0002_add_title.toml"),
-            toml::to_string(&mig2).unwrap(),
-        )
-        .unwrap();
+        mig1.write_to_file(&dir.path().join("0001_initial.toml")).unwrap();
+        mig2.write_to_file(&dir.path().join("0002_add_title.toml")).unwrap();
 
         let state = ProjectState::from_migrations(dir.path()).unwrap();
         let article = state.models.get("blog.Article").expect("Article should exist");

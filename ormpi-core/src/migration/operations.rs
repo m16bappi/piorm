@@ -1,8 +1,10 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
+use crate::backend::QueryBackend;
 use crate::fields::{DefaultValue, FieldDef, FieldType};
-use crate::model::def::{ConstraintDef, IndexDef};
+use crate::model::def::{ConstraintDef, IndexDef, M2MFieldDef, ModelDef};
+use crate::model::ddl::model_to_ddl;
 use super::state::{FieldState, ModelOptions, ModelState, ProjectState};
 
 // ---------------------------------------------------------------------------
@@ -10,13 +12,20 @@ use super::state::{FieldState, ModelOptions, ModelState, ProjectState};
 // ---------------------------------------------------------------------------
 
 pub trait MigrationOperation: std::fmt::Debug + Send + Sync {
+    fn name(&self) -> &str;
     fn operation_type(&self) -> OpType;
     /// Apply this operation to advance state forward (no DB I/O — pure state).
     fn state_forwards(&self, state: &mut ProjectState);
-    /// Reverse this operation (stubbed — Task 7.2 will implement DB execution).
-    fn state_backwards(&self, _state: &mut ProjectState) {}
+    /// Reverse this operation.
+    fn state_backwards(&self, state: &mut ProjectState);
     /// Short identifier used for migration name generation.
     fn primary_identifier(&self) -> String;
+    /// Generate forward SQL statements.
+    fn database_forwards(&self, backend: &QueryBackend) -> Vec<String>;
+    /// Generate backward SQL statements.
+    fn database_backwards(&self, backend: &QueryBackend) -> Vec<String>;
+    /// Human-readable description.
+    fn describe(&self) -> String;
 }
 
 // ---------------------------------------------------------------------------
@@ -31,6 +40,49 @@ pub enum OpType {
     AlterIndex,
     RemoveField,
     DeleteModel,
+}
+
+// ---------------------------------------------------------------------------
+// Helper: build a temporary ModelDef for DDL generation
+// ---------------------------------------------------------------------------
+
+fn build_temp_model_def(
+    app_label: &str,
+    model_name: &str,
+    fields: &[FieldDef],
+    options: &ModelOptions,
+) -> ModelDef {
+    let table_name = options
+        .db_table
+        .clone()
+        .unwrap_or_else(|| ModelDef::default_table_name(app_label, model_name));
+
+    let mut field_map: IndexMap<String, FieldDef> = IndexMap::new();
+    for f in fields {
+        field_map.insert(f.attname.clone(), f.clone());
+    }
+
+    ModelDef {
+        app_label: app_label.to_string(),
+        model_name: model_name.to_string(),
+        table_name,
+        fields: field_map,
+        pk_field: fields
+            .iter()
+            .find(|f| f.primary_key)
+            .map(|f| f.attname.clone())
+            .unwrap_or_else(|| "id".to_string()),
+        ordering: vec![],
+        unique_together: options.unique_together.clone(),
+        index_together: vec![],
+        indexes: options.indexes.clone(),
+        constraints: options.constraints.clone(),
+        m2m_fields: vec![],
+        abstract_model: false,
+        proxy: false,
+        managed: options.managed,
+        default_manager_name: "objects".to_string(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -140,9 +192,9 @@ pub struct CreateModelOp {
 }
 
 impl MigrationOperation for CreateModelOp {
-    fn operation_type(&self) -> OpType {
-        OpType::CreateModel
-    }
+    fn name(&self) -> &str { "CreateModel" }
+    fn operation_type(&self) -> OpType { OpType::CreateModel }
+
     fn state_forwards(&self, state: &mut ProjectState) {
         let mut field_map: IndexMap<String, FieldState> = IndexMap::new();
         for fd in &self.fields {
@@ -166,28 +218,100 @@ impl MigrationOperation for CreateModelOp {
             },
         );
     }
-    fn primary_identifier(&self) -> String {
-        self.name.clone()
+
+    fn state_backwards(&self, state: &mut ProjectState) {
+        let key = format!("{}.{}", self.app_label, self.name);
+        state.models.remove(&key);
     }
+
+    fn database_forwards(&self, backend: &QueryBackend) -> Vec<String> {
+        let temp_def = build_temp_model_def(&self.app_label, &self.name, &self.fields, &self.options);
+        let ddl = model_to_ddl(&temp_def, *backend);
+        let mut sqls = vec![ddl.create_table];
+        sqls.extend(ddl.create_indexes);
+        sqls.extend(ddl.create_m2m_tables);
+        sqls
+    }
+
+    fn database_backwards(&self, backend: &QueryBackend) -> Vec<String> {
+        let table_name = self.options.db_table.clone()
+            .unwrap_or_else(|| ModelDef::default_table_name(&self.app_label, &self.name));
+        let stmt = sea_query::Table::drop()
+            .table(sea_query::Alias::new(&table_name))
+            .if_exists()
+            .to_owned();
+        vec![backend.build_table_drop(&stmt)]
+    }
+
+    fn primary_identifier(&self) -> String { self.name.clone() }
+    fn describe(&self) -> String { format!("Create model {}", self.name) }
 }
 
 #[derive(Debug, Clone)]
 pub struct DeleteModelOp {
     pub app_label: String,
     pub name: String,
+    /// Fields needed for database_backwards (recreating the table).
+    pub fields: Vec<FieldDef>,
+    /// Options needed for database_backwards.
+    pub options: ModelOptions,
 }
 
 impl MigrationOperation for DeleteModelOp {
-    fn operation_type(&self) -> OpType {
-        OpType::DeleteModel
-    }
+    fn name(&self) -> &str { "DeleteModel" }
+    fn operation_type(&self) -> OpType { OpType::DeleteModel }
+
     fn state_forwards(&self, state: &mut ProjectState) {
         let key = format!("{}.{}", self.app_label, self.name);
         state.models.remove(&key);
     }
-    fn primary_identifier(&self) -> String {
-        self.name.clone()
+
+    fn state_backwards(&self, state: &mut ProjectState) {
+        // Recreate the model in state
+        let mut field_map: IndexMap<String, FieldState> = IndexMap::new();
+        for fd in &self.fields {
+            field_map.insert(
+                fd.name.clone(),
+                FieldState {
+                    name: fd.name.clone(),
+                    field_type_str: fd.field_type.to_type_str(),
+                    field_def: fd.clone(),
+                },
+            );
+        }
+        let key = format!("{}.{}", self.app_label, self.name);
+        state.models.insert(
+            key,
+            ModelState {
+                app_label: self.app_label.clone(),
+                name: self.name.clone(),
+                fields: field_map,
+                options: self.options.clone(),
+            },
+        );
     }
+
+    fn database_forwards(&self, backend: &QueryBackend) -> Vec<String> {
+        let table_name = self.options.db_table.clone()
+            .unwrap_or_else(|| ModelDef::default_table_name(&self.app_label, &self.name));
+        let stmt = sea_query::Table::drop()
+            .table(sea_query::Alias::new(&table_name))
+            .if_exists()
+            .to_owned();
+        vec![backend.build_table_drop(&stmt)]
+    }
+
+    fn database_backwards(&self, backend: &QueryBackend) -> Vec<String> {
+        let temp_def = build_temp_model_def(&self.app_label, &self.name, &self.fields, &self.options);
+        let ddl = model_to_ddl(&temp_def, *backend);
+        let mut sqls = vec![ddl.create_table];
+        sqls.extend(ddl.create_indexes);
+        sqls.extend(ddl.create_m2m_tables);
+        sqls
+    }
+
+    fn primary_identifier(&self) -> String { self.name.clone() }
+    fn describe(&self) -> String { format!("Delete model {}", self.name) }
 }
 
 #[derive(Debug, Clone)]
@@ -198,9 +322,9 @@ pub struct AddFieldOp {
 }
 
 impl MigrationOperation for AddFieldOp {
-    fn operation_type(&self) -> OpType {
-        OpType::AddField
-    }
+    fn name(&self) -> &str { "AddField" }
+    fn operation_type(&self) -> OpType { OpType::AddField }
+
     fn state_forwards(&self, state: &mut ProjectState) {
         let key = format!("{}.{}", self.app_label, self.model);
         if let Some(model_state) = state.models.get_mut(&key) {
@@ -214,9 +338,40 @@ impl MigrationOperation for AddFieldOp {
             );
         }
     }
+
+    fn state_backwards(&self, state: &mut ProjectState) {
+        let key = format!("{}.{}", self.app_label, self.model);
+        if let Some(model_state) = state.models.get_mut(&key) {
+            model_state.fields.shift_remove(&self.field.name);
+        }
+    }
+
+    fn database_forwards(&self, backend: &QueryBackend) -> Vec<String> {
+        if let Some(col) = self.field.to_column_def() {
+            let table_name = format!("{}_{}", self.app_label, self.model.to_lowercase());
+            let stmt = sea_query::Table::alter()
+                .table(sea_query::Alias::new(&table_name))
+                .add_column(col)
+                .to_owned();
+            vec![backend.build_table_alter(&stmt)]
+        } else {
+            vec![]
+        }
+    }
+
+    fn database_backwards(&self, backend: &QueryBackend) -> Vec<String> {
+        let table_name = format!("{}_{}", self.app_label, self.model.to_lowercase());
+        let stmt = sea_query::Table::alter()
+            .table(sea_query::Alias::new(&table_name))
+            .drop_column(sea_query::Alias::new(&self.field.column_name()))
+            .to_owned();
+        vec![backend.build_table_alter(&stmt)]
+    }
+
     fn primary_identifier(&self) -> String {
         format!("{}_{}", self.model.to_lowercase(), self.field.name)
     }
+    fn describe(&self) -> String { format!("Add field {} to {}", self.field.name, self.model) }
 }
 
 #[derive(Debug, Clone)]
@@ -224,21 +379,63 @@ pub struct RemoveFieldOp {
     pub app_label: String,
     pub model: String,
     pub name: String,
+    /// The field definition — needed for database_backwards (re-adding the column).
+    pub field: FieldDef,
 }
 
 impl MigrationOperation for RemoveFieldOp {
-    fn operation_type(&self) -> OpType {
-        OpType::RemoveField
-    }
+    fn name(&self) -> &str { "RemoveField" }
+    fn operation_type(&self) -> OpType { OpType::RemoveField }
+
     fn state_forwards(&self, state: &mut ProjectState) {
         let key = format!("{}.{}", self.app_label, self.model);
         if let Some(model_state) = state.models.get_mut(&key) {
             model_state.fields.shift_remove(&self.name);
         }
     }
+
+    fn state_backwards(&self, state: &mut ProjectState) {
+        let key = format!("{}.{}", self.app_label, self.model);
+        if let Some(model_state) = state.models.get_mut(&key) {
+            model_state.fields.insert(
+                self.name.clone(),
+                FieldState {
+                    name: self.name.clone(),
+                    field_type_str: self.field.field_type.to_type_str(),
+                    field_def: self.field.clone(),
+                },
+            );
+        }
+    }
+
+    fn database_forwards(&self, backend: &QueryBackend) -> Vec<String> {
+        // SQLite 3.35+ supports DROP COLUMN natively
+        let table_name = format!("{}_{}", self.app_label, self.model.to_lowercase());
+        let stmt = sea_query::Table::alter()
+            .table(sea_query::Alias::new(&table_name))
+            .drop_column(sea_query::Alias::new(&self.field.column_name()))
+            .to_owned();
+        vec![backend.build_table_alter(&stmt)]
+    }
+
+    fn database_backwards(&self, backend: &QueryBackend) -> Vec<String> {
+        // Re-add the column (SQLite supports ALTER TABLE ADD COLUMN)
+        if let Some(col) = self.field.to_column_def() {
+            let table_name = format!("{}_{}", self.app_label, self.model.to_lowercase());
+            let stmt = sea_query::Table::alter()
+                .table(sea_query::Alias::new(&table_name))
+                .add_column(col)
+                .to_owned();
+            vec![backend.build_table_alter(&stmt)]
+        } else {
+            vec![]
+        }
+    }
+
     fn primary_identifier(&self) -> String {
         format!("{}_{}", self.model.to_lowercase(), self.name)
     }
+    fn describe(&self) -> String { format!("Remove field {} from {}", self.name, self.model) }
 }
 
 #[derive(Debug, Clone)]
@@ -251,9 +448,9 @@ pub struct AlterFieldOp {
 }
 
 impl MigrationOperation for AlterFieldOp {
-    fn operation_type(&self) -> OpType {
-        OpType::AlterField
-    }
+    fn name(&self) -> &str { "AlterField" }
+    fn operation_type(&self) -> OpType { OpType::AlterField }
+
     fn state_forwards(&self, state: &mut ProjectState) {
         let key = format!("{}.{}", self.app_label, self.model);
         if let Some(model_state) = state.models.get_mut(&key) {
@@ -267,9 +464,35 @@ impl MigrationOperation for AlterFieldOp {
             );
         }
     }
+
+    fn state_backwards(&self, state: &mut ProjectState) {
+        let key = format!("{}.{}", self.app_label, self.model);
+        if let Some(model_state) = state.models.get_mut(&key) {
+            model_state.fields.insert(
+                self.name.clone(),
+                FieldState {
+                    name: self.name.clone(),
+                    field_type_str: self.old_field.field_type.to_type_str(),
+                    field_def: self.old_field.clone(),
+                },
+            );
+        }
+    }
+
+    fn database_forwards(&self, _backend: &QueryBackend) -> Vec<String> {
+        // ALTER COLUMN is complex and database-specific; return empty for now.
+        // A full implementation would use ALTER TABLE ... MODIFY COLUMN / RENAME COLUMN etc.
+        vec![]
+    }
+
+    fn database_backwards(&self, _backend: &QueryBackend) -> Vec<String> {
+        vec![]
+    }
+
     fn primary_identifier(&self) -> String {
         format!("{}_{}", self.model.to_lowercase(), self.name)
     }
+    fn describe(&self) -> String { format!("Alter field {} on {}", self.name, self.model) }
 }
 
 #[derive(Debug, Clone)]
@@ -280,18 +503,25 @@ pub struct AlterModelOptionsOp {
 }
 
 impl MigrationOperation for AlterModelOptionsOp {
-    fn operation_type(&self) -> OpType {
-        OpType::AlterIndex
-    }
+    fn name(&self) -> &str { "AlterModelOptions" }
+    fn operation_type(&self) -> OpType { OpType::AlterIndex }
+
     fn state_forwards(&self, state: &mut ProjectState) {
         let key = format!("{}.{}", self.app_label, self.model);
         if let Some(model_state) = state.models.get_mut(&key) {
             model_state.options = self.options.clone();
         }
     }
-    fn primary_identifier(&self) -> String {
-        self.model.to_lowercase()
+
+    fn state_backwards(&self, _state: &mut ProjectState) {
+        // Restoring old options is not tracked here; no-op.
     }
+
+    fn database_forwards(&self, _backend: &QueryBackend) -> Vec<String> { vec![] }
+    fn database_backwards(&self, _backend: &QueryBackend) -> Vec<String> { vec![] }
+
+    fn primary_identifier(&self) -> String { self.model.to_lowercase() }
+    fn describe(&self) -> String { format!("Alter model options for {}", self.model) }
 }
 
 // ---------------------------------------------------------------------------
@@ -360,6 +590,10 @@ pub enum StoredOperation {
     DeleteModel {
         app_label: String,
         name: String,
+        #[serde(default)]
+        fields: Vec<StoredField>,
+        #[serde(default)]
+        options: StoredModelOptions,
     },
     AddField {
         app_label: String,
@@ -370,6 +604,7 @@ pub enum StoredOperation {
         app_label: String,
         model: String,
         name: String,
+        field: StoredField,
     },
     AlterField {
         app_label: String,
@@ -397,8 +632,13 @@ impl StoredOperation {
                     options: ModelOptions::from(&options),
                 })
             }
-            StoredOperation::DeleteModel { app_label, name } => {
-                Box::new(DeleteModelOp { app_label, name })
+            StoredOperation::DeleteModel { app_label, name, fields, options } => {
+                Box::new(DeleteModelOp {
+                    app_label,
+                    name,
+                    fields: fields.iter().map(|f| f.to_field_def()).collect(),
+                    options: ModelOptions::from(&options),
+                })
             }
             StoredOperation::AddField { app_label, model, field } => {
                 Box::new(AddFieldOp {
@@ -407,8 +647,13 @@ impl StoredOperation {
                     field: field.to_field_def(),
                 })
             }
-            StoredOperation::RemoveField { app_label, model, name } => {
-                Box::new(RemoveFieldOp { app_label, model, name })
+            StoredOperation::RemoveField { app_label, model, name, field } => {
+                Box::new(RemoveFieldOp {
+                    app_label,
+                    model,
+                    name,
+                    field: field.to_field_def(),
+                })
             }
             StoredOperation::AlterField { app_label, model, old_field, new_field } => {
                 Box::new(AlterFieldOp {
@@ -430,7 +675,7 @@ impl StoredOperation {
     }
 }
 
-/// Top-level structure of a `.toml` migration file.
+/// Top-level structure of a `.toml` migration file (legacy, used in state.rs).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MigrationFile {
     pub name: String,
