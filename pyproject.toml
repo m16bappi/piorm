@@ -80,7 +80,7 @@ module-name = "ormpi._core"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
+testpaths = ["__tests__"]
 addopts = "--tb=short"
 
 # ── ruff ─────────────────────────────────────────────────────────────────────

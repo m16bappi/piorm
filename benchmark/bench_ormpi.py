@@ -4,7 +4,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python"))
 
 import ormpi
-from ormpi import CharField, IntegerField
+from ormpi.fields import CharField, IntegerField
 
 from bench_config import BenchResult, BULK_COUNT, timeit_async
 
@@ -80,12 +80,12 @@ def run() -> BenchResult:
     result.read_get_ms = timeit_async(read_get)
 
     async def update():
-        await BenchAuthor.objects.filter(age__gte=50).aupdate(email="updated@bench.com")
+        await BenchAuthor.objects.filter(age__gte=50).update(email="updated@bench.com")
 
     result.update_ms = timeit_async(update)
 
     async def delete():
-        await BenchAuthor.objects.filter(age__gte=70).adelete()
+        await BenchAuthor.objects.filter(age__gte=70).delete()
 
     result.delete_ms = timeit_async(delete)
 

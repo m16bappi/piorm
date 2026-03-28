@@ -12,7 +12,7 @@ console = Console()
 
 NUM_WARMUP = 3
 NUM_ROUNDS = 10
-BULK_COUNT = 1000
+BULK_COUNT = 10000
 
 
 @dataclass
@@ -67,7 +67,7 @@ def print_results(results: List[BenchResult]):
 
     operations = [
         ("Create (single)", "create_ms"),
-        ("Bulk Create (1000)", "bulk_create_ms"),
+        ("Bulk Create (10k)", "bulk_create_ms"),
         ("Read All", "read_all_ms"),
         ("Read Filtered", "read_filter_ms"),
         ("Read by PK (get)", "read_get_ms"),
