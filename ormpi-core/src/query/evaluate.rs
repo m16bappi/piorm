@@ -9,6 +9,7 @@ use crate::pool::OrmpiPool;
 use crate::query::filter::{FilterNode, Lookup, QNode};
 use crate::query::state::{QueryState, SelectFields};
 use crate::row::{mysql_row_to_ormpi, postgres_row_to_ormpi, sqlite_row_to_ormpi, OrmpiRow};
+use crate::transaction::{OrmpiTransaction, TransactionHandle};
 use crate::value::OrmpiValue;
 use crate::{OrmpiError, Result};
 
@@ -645,5 +646,84 @@ fn value_as_str(value: &OrmpiValue) -> String {
         OrmpiValue::Int(i) => i.to_string(),
         OrmpiValue::Float(f) => f.to_string(),
         _ => String::new(),
+    }
+}
+
+/// INSERT a single row within an active transaction and return the pk value.
+pub async fn create_row_in_txn(
+    field_values: &[(String, OrmpiValue)],
+    txn: &mut OrmpiTransaction,
+    backend: &QueryBackend,
+    model_def: &ModelDef,
+) -> Result<i64> {
+    use std::ops::DerefMut;
+
+    let table = Alias::new(&model_def.table_name);
+    let mut stmt = Query::insert();
+    stmt.into_table(table);
+
+    let mut cols = vec![];
+    let mut vals: Vec<Expr> = vec![];
+    for (field_name, value) in field_values {
+        let col_name = if let Some(f) = model_def.fields.get(field_name.as_str()) {
+            f.column_name()
+        } else {
+            field_name.clone()
+        };
+        cols.push(Alias::new(&col_name));
+        vals.push(Expr::val(value.to_sea_value()));
+    }
+    stmt.columns(cols);
+    stmt.values(vals).map_err(|e| OrmpiError::Other(e.to_string()))?;
+
+    let (sql, sea_vals) = backend.build_insert(&stmt);
+
+    match &mut txn.handle {
+        TransactionHandle::Sqlite(t) => {
+            let args = sqlite_arguments(sea_vals);
+            let result = sqlx::query_with(&sql, args).execute(t.as_mut().deref_mut()).await?;
+            Ok(result.last_insert_rowid())
+        }
+        TransactionHandle::Mysql(t) => {
+            let args = mysql_arguments(sea_vals);
+            let result = sqlx::query_with(&sql, args).execute(t.as_mut().deref_mut()).await?;
+            Ok(result.last_insert_id() as i64)
+        }
+        TransactionHandle::Postgres(t) => {
+            let args = postgres_arguments(sea_vals);
+            let result = sqlx::query_with(&sql, args).execute(t.as_mut().deref_mut()).await?;
+            Ok(result.rows_affected() as i64)
+        }
+    }
+}
+
+/// SELECT rows within an active transaction using QueryState filters.
+pub async fn evaluate_in_txn(
+    state: &QueryState,
+    txn: &mut OrmpiTransaction,
+    backend: &QueryBackend,
+    model_def: &ModelDef,
+) -> Result<Vec<OrmpiRow>> {
+    use std::ops::DerefMut;
+
+    let stmt = build_select(state, model_def);
+    let (sql, sea_vals) = backend.build_select(&stmt);
+
+    match &mut txn.handle {
+        TransactionHandle::Sqlite(t) => {
+            let args = sqlite_arguments(sea_vals);
+            let rows = sqlx::query_with(&sql, args).fetch_all(t.as_mut().deref_mut()).await?;
+            rows.iter().map(sqlite_row_to_ormpi).collect()
+        }
+        TransactionHandle::Mysql(t) => {
+            let args = mysql_arguments(sea_vals);
+            let rows = sqlx::query_with(&sql, args).fetch_all(t.as_mut().deref_mut()).await?;
+            rows.iter().map(mysql_row_to_ormpi).collect()
+        }
+        TransactionHandle::Postgres(t) => {
+            let args = postgres_arguments(sea_vals);
+            let rows = sqlx::query_with(&sql, args).fetch_all(t.as_mut().deref_mut()).await?;
+            rows.iter().map(postgres_row_to_ormpi).collect()
+        }
     }
 }

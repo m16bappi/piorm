@@ -112,6 +112,11 @@ impl PyManager {
         qs.bind(py).call_method1("using", (alias,)).map(|r| r.into())
     }
 
+    fn using_transaction(&self, py: Python<'_>, txn: PyObject) -> PyResult<PyObject> {
+        let qs = self.get_queryset(py)?;
+        qs.bind(py).call_method1("using_transaction", (txn,)).map(|r| r.into())
+    }
+
     fn none(&self, py: Python<'_>) -> PyResult<PyObject> {
         let qs = self.get_queryset(py)?;
         qs.bind(py).call_method0("none").map(|r| r.into())
