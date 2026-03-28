@@ -17,3 +17,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 indexmap = "2"
 rust_decimal.workspace = true
 futures.workspace = true
+toml = { version = "0.8", features = ["preserve_order"] }
+
+[dev-dependencies]
+tempfile = "3"

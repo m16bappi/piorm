@@ -22,7 +22,7 @@ pub struct ModelDef {
     pub default_manager_name: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct OrderSpec {
     pub field: String,
     pub descending: bool,
@@ -30,7 +30,7 @@ pub struct OrderSpec {
     pub nulls_first: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IndexDef {
     pub name: Option<String>,
     pub fields: Vec<String>,
@@ -38,13 +38,13 @@ pub struct IndexDef {
     pub condition: Option<String>, // partial index WHERE clause
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConstraintDef {
     pub name: String,
     pub kind: ConstraintKind,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ConstraintKind {
     UniqueConstraint {
         fields: Vec<String>,

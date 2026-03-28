@@ -4,6 +4,7 @@ pub mod config;
 pub mod error;
 pub mod executor;
 pub mod fields;
+pub mod migration;
 pub mod model;
 pub mod pool;
 pub mod query;
