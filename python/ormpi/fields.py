@@ -60,10 +60,8 @@ try:
         DateField,
         DateTimeField,
         DecimalField,
-        DO_NOTHING,
         DurationField,
         EmailField,
-        Field,
         FloatField,
         ForeignKey,
         GenericIPAddressField,
@@ -76,17 +74,57 @@ try:
         PositiveIntegerField,
         PositiveSmallIntegerField,
         PROTECT,
-        RESTRICT,
-        SET_DEFAULT,
         SET_NULL,
         SlugField,
-        SmallAutoField,
         SmallIntegerField,
         TextField,
         TimeField,
-        URLField,
         UUIDField,
     )
+    from ormpi._core import UrlField as URLField  # type: ignore[attr-defined]  # pyright: ignore
+
+    # These may not be in all build variants; fall back to shims if absent.
+    try:
+        from ormpi._core import Field  # type: ignore[attr-defined]  # pyright: ignore
+    except ImportError:
+        class Field:  # type: ignore[no-redef]
+            name: str = ""
+            attname: str = ""
+            null: bool = False
+            blank: bool = False
+            unique: bool = False
+            primary_key: bool = False
+            db_index: bool = False
+            editable: bool = True
+            help_text: str = ""
+
+            def __init__(self, **kwargs: Any) -> None:
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+            def contribute_to_class(self, cls: type, name: str) -> None:
+                self.name = name
+
+    try:
+        from ormpi._core import SmallAutoField  # type: ignore[attr-defined]  # pyright: ignore
+    except ImportError:
+        SmallAutoField = AutoField  # type: ignore[misc,assignment]
+
+    try:
+        from ormpi._core import SET_DEFAULT  # type: ignore[attr-defined]  # pyright: ignore
+    except ImportError:
+        SET_DEFAULT: str = "SET_DEFAULT"  # type: ignore[misc]
+
+    try:
+        from ormpi._core import DO_NOTHING  # type: ignore[attr-defined]  # pyright: ignore
+    except ImportError:
+        DO_NOTHING: str = "DO_NOTHING"  # type: ignore[misc]
+
+    try:
+        from ormpi._core import RESTRICT  # type: ignore[attr-defined]  # pyright: ignore
+    except ImportError:
+        RESTRICT: str = "RESTRICT"  # type: ignore[misc]
+
 except ImportError:
     # Fallback pure-Python shims for environments without the compiled extension.
     class Field:  # type: ignore[no-redef]

@@ -1182,6 +1182,7 @@ name = "ormpi-py"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "clap",
  "futures",
  "indexmap",
  "once_cell",
