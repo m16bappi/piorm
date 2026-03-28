@@ -1,136 +1,44 @@
 """
-ormpi — A Django-like async ORM built on Rust (sea-query + sqlx).
-"""
-from __future__ import annotations
+ormpi — async Python ORM built on Rust (sea-query + sqlx).
 
+Canonical import patterns:
+
+    from ormpi import configure, close, Model
+    from ormpi.fields import CharField, IntegerField, ForeignKey, CASCADE
+    from ormpi.expr import Q, F, Count, Sum
+    from ormpi.transaction import atomic, begin, Transaction
+    from ormpi.db import connections
+    from ormpi.exceptions import DoesNotExist, ValidationError
+"""
+
+# ── Sub-modules ────────────────────────────────────────────────────────────
 import ormpi.db as db
-from ormpi._core import (
-    Avg,
-    Count,
-    Max,
-    Min,
-    Q,
-    Sum,
-    begin,
-    close,
-    configure,
-    execute_raw,
-    get_version,
-)
-from ormpi.exceptions import (
-    DatabaseError,
-    DoesNotExist,
-    FieldError,
-    ImproperlyConfigured,
-    IntegrityError,
-    MigrationError,
-    MultipleObjectsReturned,
-    OperationalError,
-    OrmpiError,
-    TransactionError,
-    ValidationError,
-)
-from ormpi.fields import (
-    BigIntegerField,
-    BinaryField,
-    BooleanField,
-    CASCADE,
-    CharField,
-    DateField,
-    DateTimeField,
-    DecimalField,
-    DO_NOTHING,
-    DurationField,
-    EmailField,
-    Field,
-    FloatField,
-    ForeignKey,
-    GenericIPAddressField,
-    IntegerField,
-    IPAddressField,
-    JSONField,
-    ManyToManyField,
-    OneToOneField,
-    PositiveBigIntegerField,
-    PositiveIntegerField,
-    PositiveSmallIntegerField,
-    PROTECT,
-    RESTRICT,
-    SET_DEFAULT,
-    SET_NULL,
-    SlugField,
-    SmallIntegerField,
-    TextField,
-    TimeField,
-    URLField,
-    UUIDField,
-)
+import ormpi.exceptions as exceptions
+import ormpi.expr as expr
+import ormpi.fields as fields
+import ormpi.transaction as transaction
+
+# ── Core setup ────────────────────────────────────────────────────────────
+from ormpi._core import close, execute_raw, get_version
+from ormpi.db import configure
+
+# ── Model ─────────────────────────────────────────────────────────────────
 from ormpi.models import Model
-from ormpi.transaction import atomic
 
 __version__: str = get_version()
 
 __all__ = [
-    # Core
+    # setup
     "configure",
     "close",
-    "begin",
-    "atomic",
     "execute_raw",
     "__version__",
+    # model
     "Model",
+    # sub-modules
+    "fields",
+    "expr",
+    "transaction",
     "db",
-    "Q",
-    # Aggregates
-    "Count",
-    "Sum",
-    "Avg",
-    "Max",
-    "Min",
-    # Fields
-    "Field",
-    "IntegerField",
-    "BigIntegerField",
-    "SmallIntegerField",
-    "PositiveIntegerField",
-    "PositiveBigIntegerField",
-    "PositiveSmallIntegerField",
-    "FloatField",
-    "DecimalField",
-    "CharField",
-    "TextField",
-    "SlugField",
-    "EmailField",
-    "URLField",
-    "BooleanField",
-    "DateField",
-    "TimeField",
-    "DateTimeField",
-    "DurationField",
-    "UUIDField",
-    "JSONField",
-    "BinaryField",
-    "IPAddressField",
-    "GenericIPAddressField",
-    "ForeignKey",
-    "OneToOneField",
-    "ManyToManyField",
-    "CASCADE",
-    "PROTECT",
-    "SET_NULL",
-    "SET_DEFAULT",
-    "DO_NOTHING",
-    "RESTRICT",
-    # Exceptions
-    "OrmpiError",
-    "DatabaseError",
-    "IntegrityError",
-    "OperationalError",
-    "ValidationError",
-    "FieldError",
-    "TransactionError",
-    "MigrationError",
-    "DoesNotExist",
-    "MultipleObjectsReturned",
-    "ImproperlyConfigured",
+    "exceptions",
 ]

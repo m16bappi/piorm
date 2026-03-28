@@ -5,8 +5,6 @@ Field types for ormpi model definitions.
 These are imported from the Rust `_core` extension. This module re-exports
 them for convenience and provides a stable import path.
 """
-from __future__ import annotations
-
 from typing import Any
 
 __all__ = [

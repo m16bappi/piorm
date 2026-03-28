@@ -7,8 +7,6 @@ Registration into the global `ModelRegistry` is done by the Rust function
 `_register_model_class`, called explicitly from `__init_subclass__`.
 """
 
-from __future__ import annotations
-
 __all__ = ["Model"]
 
 from typing import Any

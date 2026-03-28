@@ -1,13 +1,13 @@
 """
 Async transaction utilities: `atomic()` context manager.
 """
-from __future__ import annotations
 
-__all__ = ["atomic"]
+__all__ = ["atomic", "begin", "Transaction"]
 
 from typing import Any
 
-from ormpi._core import Transaction
+from ormpi._core import Transaction as Transaction
+from ormpi._core import begin as begin
 from ormpi._core import begin as _begin
 from ormpi._core import create_savepoint as _create_savepoint
 from ormpi._core import release_savepoint as _release_savepoint

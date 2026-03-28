@@ -1,5 +1,4 @@
 """Per-asyncio-task active transaction registry."""
-from __future__ import annotations
 
 import asyncio
 from typing import Any
