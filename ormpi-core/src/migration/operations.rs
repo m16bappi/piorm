@@ -117,6 +117,8 @@ pub struct StoredField {
     pub max_length: Option<u32>,
     #[serde(default)]
     pub help_text: Option<String>,
+    #[serde(default)]
+    pub auto_increment: bool,
 }
 
 impl From<&FieldDef> for StoredField {
@@ -133,6 +135,7 @@ impl From<&FieldDef> for StoredField {
             editable: fd.editable,
             max_length: fd.max_length,
             help_text: None,
+            auto_increment: fd.auto_increment,
         }
     }
 }
@@ -145,6 +148,13 @@ impl StoredField {
             .attname
             .clone()
             .unwrap_or_else(|| self.name.clone());
+        // Infer auto_increment from the stored flag OR legacy "Auto*Field" type strings
+        // (backward-compat with old migration files).
+        let auto_increment = self.auto_increment
+            || matches!(
+                self.field_type_str.as_str(),
+                "AutoIntField" | "AutoBigIntField" | "AutoSmallIntField"
+            );
         FieldDef {
             name: self.name.clone(),
             attname,
@@ -157,6 +167,7 @@ impl StoredField {
             editable: self.editable,
             default: DefaultValue::None,
             choices: vec![],
+            auto_increment,
             auto_now: false,
             auto_now_add: false,
             max_length: self.max_length,

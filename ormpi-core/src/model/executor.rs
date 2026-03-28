@@ -52,19 +52,12 @@ async fn insert_instance(
     values: &HashMap<String, OrmpiValue>,
 ) -> Result<OrmpiValue> {
     // Fields to insert: skip auto-pk unless the user explicitly set it.
-    let is_auto_pk = |ft: &FieldType| {
-        matches!(
-            ft,
-            FieldType::AutoInt | FieldType::AutoBigInt | FieldType::AutoSmallInt
-        )
-    };
-
     let fields_to_insert: Vec<_> = model_def
         .fields
         .values()
         .filter(|f| !matches!(f.field_type, FieldType::ManyToMany { .. }))
         .filter(|f| {
-            if f.primary_key && is_auto_pk(&f.field_type) {
+            if f.primary_key && f.auto_increment {
                 // Include explicit pk value only when non-null
                 matches!(values.get(&f.attname), Some(v) if !matches!(v, OrmpiValue::Null))
             } else {

@@ -183,6 +183,7 @@ mod tests {
             editable: true,
             default: DefaultValue::None,
             choices: vec![],
+            auto_increment: false,
             auto_now: false,
             auto_now_add: false,
             max_length: None,
@@ -230,7 +231,7 @@ mod tests {
     #[test]
     fn test_detect_new_model() {
         let from = state_with(&[]);
-        let to = state_with(&[("blog", "Article", &[("id", FieldType::AutoBigInt)])]);
+        let to = state_with(&[("blog", "Article", &[("id", FieldType::BigInt)])]);
         let det = AutoDetector::new(from, to);
         let ops = det.detect_changes();
         assert_eq!(ops.len(), 1);
@@ -240,7 +241,7 @@ mod tests {
 
     #[test]
     fn test_detect_deleted_model() {
-        let from = state_with(&[("blog", "Article", &[("id", FieldType::AutoBigInt)])]);
+        let from = state_with(&[("blog", "Article", &[("id", FieldType::BigInt)])]);
         let to = state_with(&[]);
         let det = AutoDetector::new(from, to);
         let ops = det.detect_changes();
@@ -250,12 +251,12 @@ mod tests {
 
     #[test]
     fn test_detect_added_field() {
-        let from = state_with(&[("blog", "Article", &[("id", FieldType::AutoBigInt)])]);
+        let from = state_with(&[("blog", "Article", &[("id", FieldType::BigInt)])]);
         let to = state_with(&[(
             "blog",
             "Article",
             &[
-                ("id", FieldType::AutoBigInt),
+                ("id", FieldType::BigInt),
                 ("title", FieldType::Char { max_length: 200 }),
             ],
         )]);
@@ -271,11 +272,11 @@ mod tests {
             "blog",
             "Article",
             &[
-                ("id", FieldType::AutoBigInt),
+                ("id", FieldType::BigInt),
                 ("title", FieldType::Char { max_length: 200 }),
             ],
         )]);
-        let to = state_with(&[("blog", "Article", &[("id", FieldType::AutoBigInt)])]);
+        let to = state_with(&[("blog", "Article", &[("id", FieldType::BigInt)])]);
         let det = AutoDetector::new(from, to);
         let ops = det.detect_changes();
         assert_eq!(ops.len(), 1);
@@ -288,7 +289,7 @@ mod tests {
             "blog",
             "Article",
             &[
-                ("id", FieldType::AutoBigInt),
+                ("id", FieldType::BigInt),
                 ("title", FieldType::Char { max_length: 100 }),
             ],
         )]);
@@ -296,7 +297,7 @@ mod tests {
             "blog",
             "Article",
             &[
-                ("id", FieldType::AutoBigInt),
+                ("id", FieldType::BigInt),
                 ("title", FieldType::Char { max_length: 200 }),
             ],
         )]);
@@ -309,7 +310,7 @@ mod tests {
     #[test]
     fn test_no_spurious_changes() {
         let fields = &[
-            ("id", FieldType::AutoBigInt),
+            ("id", FieldType::BigInt),
             ("title", FieldType::Char { max_length: 200 }),
         ];
         let from = state_with(&[("blog", "Article", fields)]);
@@ -322,13 +323,13 @@ mod tests {
     #[test]
     fn test_sort_create_before_add_field() {
         // Two models: create + add field on another → create comes first regardless
-        let from = state_with(&[("blog", "Tag", &[("id", FieldType::AutoBigInt)])]);
+        let from = state_with(&[("blog", "Tag", &[("id", FieldType::BigInt)])]);
         let to = state_with(&[
             ("blog", "Tag", &[
-                ("id", FieldType::AutoBigInt),
+                ("id", FieldType::BigInt),
                 ("slug", FieldType::Char { max_length: 50 }),
             ]),
-            ("blog", "Article", &[("id", FieldType::AutoBigInt)]),
+            ("blog", "Article", &[("id", FieldType::BigInt)]),
         ]);
         let det = AutoDetector::new(from, to);
         let ops = det.detect_changes();

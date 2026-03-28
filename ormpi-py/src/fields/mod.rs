@@ -180,6 +180,69 @@ macro_rules! impl_simple_field {
                         editable,
                         default: crate::fields::parse_default(py, default)?,
                         choices: vec![],
+                        auto_increment: false,
+                        auto_now: false,
+                        auto_now_add: false,
+                        max_length: None,
+                        validators: vec![],
+                        verbose_name,
+                        related_name: None,
+                    },
+                })
+            }
+        }
+    };
+}
+
+/// Generate a field class that supports the `auto_increment` keyword argument.
+/// Used for integer field types (IntegerField, BigIntegerField, SmallIntegerField).
+#[macro_export]
+macro_rules! impl_integer_field {
+    ($cls:ident, $display_name:literal, $field_type_expr:expr) => {
+        impl_field_common!($cls, $display_name);
+
+        #[pymethods]
+        impl $cls {
+            #[new]
+            #[pyo3(signature = (
+                *,
+                null = false,
+                default = None,
+                unique = false,
+                db_index = false,
+                primary_key = false,
+                editable = true,
+                db_column = None,
+                verbose_name = None,
+                auto_increment = false,
+            ))]
+            #[allow(clippy::too_many_arguments)]
+            fn new(
+                py: pyo3::Python<'_>,
+                null: bool,
+                default: Option<pyo3::PyObject>,
+                unique: bool,
+                db_index: bool,
+                primary_key: bool,
+                editable: bool,
+                db_column: Option<String>,
+                verbose_name: Option<String>,
+                auto_increment: bool,
+            ) -> pyo3::PyResult<Self> {
+                Ok(Self {
+                    inner: ormpi_core::fields::FieldDef {
+                        name: String::new(),
+                        attname: String::new(),
+                        db_column,
+                        field_type: $field_type_expr,
+                        null,
+                        unique,
+                        db_index,
+                        primary_key,
+                        editable,
+                        default: crate::fields::parse_default(py, default)?,
+                        choices: vec![],
+                        auto_increment,
                         auto_now: false,
                         auto_now_add: false,
                         max_length: None,
@@ -195,8 +258,6 @@ macro_rules! impl_simple_field {
 
 pub fn register_fields(m: &Bound<'_, PyModule>) -> PyResult<()> {
     relational::register_constants(m)?;
-    m.add_class::<scalar::PyAutoField>()?;
-    m.add_class::<scalar::PyBigAutoField>()?;
     m.add_class::<scalar::PyIntegerField>()?;
     m.add_class::<scalar::PyBigIntegerField>()?;
     m.add_class::<scalar::PySmallIntegerField>()?;

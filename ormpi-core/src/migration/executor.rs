@@ -415,6 +415,7 @@ mod tests {
             editable: !pk,
             max_length: None,
             help_text: None,
+            auto_increment: false,
         }
     }
 
@@ -434,7 +435,7 @@ mod tests {
                 app_label: app.to_string(),
                 name: model.to_string(),
                 fields: vec![
-                    make_stored_field("id", "AutoIntField", true),
+                    make_stored_field("id", "IntegerField", true),
                     make_stored_field("title", "TextField", false),
                 ],
                 options: StoredModelOptions { managed: true, ..Default::default() },
@@ -522,7 +523,7 @@ mod tests {
             operations: vec![StoredOperation::CreateModel {
                 app_label: "blog".to_string(),
                 name: "Post".to_string(),
-                fields: vec![make_stored_field("id", "AutoIntField", true)],
+                fields: vec![make_stored_field("id", "IntegerField", true)],
                 options: StoredModelOptions { managed: true, ..Default::default() },
             }],
         };

@@ -163,7 +163,6 @@ impl MigrationGraph {
 mod tests {
     use super::*;
     use crate::migration::file::{MigrationFile, MigrationMeta};
-    use crate::migration::operations::StoredOperation;
 
     fn make_file(name: &str, deps: &[&str]) -> MigrationFile {
         MigrationFile {

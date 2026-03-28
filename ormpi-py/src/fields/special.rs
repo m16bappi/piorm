@@ -62,6 +62,7 @@ mod tests {
                 editable: true,
                 default: DefaultValue::None,
                 choices: vec![],
+                auto_increment: false,
                 auto_now: false,
                 auto_now_add: false,
                 max_length: None,

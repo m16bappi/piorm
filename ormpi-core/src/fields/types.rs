@@ -1,11 +1,6 @@
 /// All supported database field/column types.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FieldType {
-    // Auto primary keys
-    AutoInt,
-    AutoBigInt,
-    AutoSmallInt,
-
     // Integer types
     SmallInt,
     Int,
@@ -64,9 +59,6 @@ impl FieldType {
     /// Produce a stable string for change-detection comparison.
     pub fn to_type_str(&self) -> String {
         match self {
-            FieldType::AutoInt          => "AutoIntField".to_string(),
-            FieldType::AutoBigInt       => "AutoBigIntField".to_string(),
-            FieldType::AutoSmallInt     => "AutoSmallIntField".to_string(),
             FieldType::SmallInt         => "SmallIntField".to_string(),
             FieldType::Int              => "IntegerField".to_string(),
             FieldType::BigInt           => "BigIntegerField".to_string(),
@@ -120,9 +112,10 @@ impl FieldType {
         }
 
         match s {
-            "AutoIntField"             => Some(FieldType::AutoInt),
-            "AutoBigIntField"          => Some(FieldType::AutoBigInt),
-            "AutoSmallIntField"        => Some(FieldType::AutoSmallInt),
+            // Backward-compat: old migration files may contain these type strings.
+            "AutoIntField"             => Some(FieldType::Int),
+            "AutoBigIntField"          => Some(FieldType::BigInt),
+            "AutoSmallIntField"        => Some(FieldType::SmallInt),
             "SmallIntField"            => Some(FieldType::SmallInt),
             "IntegerField"             => Some(FieldType::Int),
             "BigIntegerField"          => Some(FieldType::BigInt),

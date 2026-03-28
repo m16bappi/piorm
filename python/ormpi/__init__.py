@@ -31,8 +31,6 @@ from ormpi.exceptions import (
     ValidationError,
 )
 from ormpi.fields import (
-    AutoField,
-    BigAutoField,
     BigIntegerField,
     BinaryField,
     BooleanField,
@@ -61,7 +59,6 @@ from ormpi.fields import (
     SET_DEFAULT,
     SET_NULL,
     SlugField,
-    SmallAutoField,
     SmallIntegerField,
     TextField,
     TimeField,
@@ -92,9 +89,6 @@ __all__ = [
     "Min",
     # Fields
     "Field",
-    "AutoField",
-    "BigAutoField",
-    "SmallAutoField",
     "IntegerField",
     "BigIntegerField",
     "SmallIntegerField",

@@ -170,6 +170,7 @@ mod tests {
             editable: true,
             default: DefaultValue::None,
             choices: vec![],
+            auto_increment: false,
             auto_now: false,
             auto_now_add: false,
             max_length: None,
@@ -218,7 +219,7 @@ mod tests {
         let op = CreateModelOp {
             app_label: "blog".to_string(),
             name: "Article".to_string(),
-            fields: vec![make_field_def("id", FieldType::AutoBigInt)],
+            fields: vec![make_field_def("id", FieldType::BigInt)],
             options: ModelOptions { managed: true, ..Default::default() },
         };
         state.apply_operation(&op);
@@ -242,7 +243,7 @@ mod tests {
                 fields: vec![StoredField {
                     name: "id".to_string(),
                     attname: Some("id".to_string()),
-                    field_type_str: "AutoBigIntField".to_string(),
+                    field_type_str: "BigIntegerField".to_string(),
                     null: false,
                     blank: false,
                     unique: false,
@@ -251,6 +252,7 @@ mod tests {
                     editable: false,
                     max_length: None,
                     help_text: None,
+                    auto_increment: false,
                 }],
                 options: StoredModelOptions { managed: true, ..Default::default() },
             }],
@@ -275,6 +277,7 @@ mod tests {
                     editable: true,
                     max_length: Some(200),
                     help_text: None,
+                    auto_increment: false,
                 },
             }],
         );

@@ -1,44 +1,26 @@
-use crate::{impl_field_common, impl_simple_field};
+use crate::{impl_field_common, impl_integer_field, impl_simple_field};
 use ormpi_core::fields::{DefaultValue, FieldDef, FieldType};
 use pyo3::prelude::*;
 
-// ── Auto primary key fields ────────────────────────────────────────────────
-
-#[pyclass(name = "AutoField")]
-pub struct PyAutoField {
-    pub(crate) inner: FieldDef,
-}
-impl_simple_field!(PyAutoField, "AutoField", FieldType::AutoInt);
-
-#[pyclass(name = "BigAutoField")]
-pub struct PyBigAutoField {
-    pub(crate) inner: FieldDef,
-}
-impl_simple_field!(PyBigAutoField, "BigAutoField", FieldType::AutoBigInt);
-
-// ── Integer fields ─────────────────────────────────────────────────────────
+// ── Integer fields (support auto_increment kwarg) ──────────────────────────
 
 #[pyclass(name = "IntegerField")]
 pub struct PyIntegerField {
     pub(crate) inner: FieldDef,
 }
-impl_simple_field!(PyIntegerField, "IntegerField", FieldType::Int);
+impl_integer_field!(PyIntegerField, "IntegerField", FieldType::Int);
 
 #[pyclass(name = "BigIntegerField")]
 pub struct PyBigIntegerField {
     pub(crate) inner: FieldDef,
 }
-impl_simple_field!(PyBigIntegerField, "BigIntegerField", FieldType::BigInt);
+impl_integer_field!(PyBigIntegerField, "BigIntegerField", FieldType::BigInt);
 
 #[pyclass(name = "SmallIntegerField")]
 pub struct PySmallIntegerField {
     pub(crate) inner: FieldDef,
 }
-impl_simple_field!(
-    PySmallIntegerField,
-    "SmallIntegerField",
-    FieldType::SmallInt
-);
+impl_integer_field!(PySmallIntegerField, "SmallIntegerField", FieldType::SmallInt);
 
 #[pyclass(name = "PositiveSmallIntegerField")]
 pub struct PyPositiveSmallIntegerField {
@@ -140,6 +122,7 @@ impl PyCharField {
                 editable,
                 default: crate::fields::parse_default(py, default)?,
                 choices: vec![],
+                auto_increment: false,
                 auto_now: false,
                 auto_now_add: false,
                 max_length: Some(max_length),
@@ -211,6 +194,7 @@ impl PyDecimalField {
                 editable,
                 default: crate::fields::parse_default(py, default)?,
                 choices: vec![],
+                auto_increment: false,
                 auto_now: false,
                 auto_now_add: false,
                 max_length: None,
@@ -272,6 +256,7 @@ impl PySlugField {
                 editable,
                 default: crate::fields::parse_default(py, default)?,
                 choices: vec![],
+                auto_increment: false,
                 auto_now: false,
                 auto_now_add: false,
                 max_length: Some(max_length),
@@ -331,6 +316,7 @@ impl PyEmailField {
                 editable,
                 default: crate::fields::parse_default(py, default)?,
                 choices: vec![],
+                auto_increment: false,
                 auto_now: false,
                 auto_now_add: false,
                 max_length: Some(max_length),
@@ -390,6 +376,7 @@ impl PyUrlField {
                 editable,
                 default: crate::fields::parse_default(py, default)?,
                 choices: vec![],
+                auto_increment: false,
                 auto_now: false,
                 auto_now_add: false,
                 max_length: Some(max_length),
@@ -421,6 +408,7 @@ mod tests {
                 editable: true,
                 default: DefaultValue::None,
                 choices: vec![],
+                auto_increment: false,
                 auto_now: false,
                 auto_now_add: false,
                 max_length: None,
@@ -452,6 +440,7 @@ mod tests {
                 editable: true,
                 default: DefaultValue::None,
                 choices: vec![],
+                auto_increment: false,
                 auto_now: false,
                 auto_now_add: false,
                 max_length: Some(100),

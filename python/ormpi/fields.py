@@ -11,9 +11,6 @@ from typing import Any
 
 __all__ = [
     "Field",
-    "AutoField",
-    "BigAutoField",
-    "SmallAutoField",
     "IntegerField",
     "BigIntegerField",
     "SmallIntegerField",
@@ -50,8 +47,6 @@ __all__ = [
 
 try:
     from ormpi._core import (  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue,reportAssignmentType]
-        AutoField,
-        BigAutoField,
         BigIntegerField,
         BinaryField,
         BooleanField,
@@ -91,12 +86,10 @@ try:
             name: str = ""
             attname: str = ""
             null: bool = False
-            blank: bool = False
             unique: bool = False
             primary_key: bool = False
             db_index: bool = False
             editable: bool = True
-            help_text: str = ""
 
             def __init__(self, **kwargs: Any) -> None:
                 for k, v in kwargs.items():
@@ -104,11 +97,6 @@ try:
 
             def contribute_to_class(self, cls: type, name: str) -> None:
                 self.name = name
-
-    try:
-        from ormpi._core import SmallAutoField  # type: ignore[attr-defined]  # pyright: ignore
-    except ImportError:
-        SmallAutoField = AutoField  # type: ignore[misc,assignment]
 
     try:
         from ormpi._core import SET_DEFAULT  # type: ignore[attr-defined]  # pyright: ignore
@@ -131,12 +119,10 @@ except ImportError:
         name: str = ""
         attname: str = ""
         null: bool = False
-        blank: bool = False
         unique: bool = False
         primary_key: bool = False
         db_index: bool = False
         editable: bool = True
-        help_text: str = ""
 
         def __init__(self, **kwargs: Any) -> None:
             for k, v in kwargs.items():
@@ -145,9 +131,6 @@ except ImportError:
         def contribute_to_class(self, cls: type, name: str) -> None:
             self.name = name
 
-    class AutoField(Field): ...  # type: ignore[no-redef]
-    class BigAutoField(Field): ...  # type: ignore[no-redef]
-    class SmallAutoField(Field): ...  # type: ignore[no-redef]
     class IntegerField(Field): ...  # type: ignore[no-redef]
     class BigIntegerField(Field): ...  # type: ignore[no-redef]
     class SmallIntegerField(IntegerField): ...  # type: ignore[no-redef]

@@ -221,15 +221,6 @@ class Field:
     def __get__(self, obj: Any, objtype: type | None = None) -> Any: ...
     def __set__(self, obj: Any, value: Any) -> None: ...
 
-class AutoField(Field):
-    def __init__(self, *, primary_key: bool = True, **kwargs: Any) -> None: ...
-
-class BigAutoField(Field):
-    def __init__(self, *, primary_key: bool = True, **kwargs: Any) -> None: ...
-
-class SmallAutoField(Field):
-    def __init__(self, *, primary_key: bool = True, **kwargs: Any) -> None: ...
-
 class IntegerField(Field):
     def __init__(
         self,
@@ -240,12 +231,34 @@ class IntegerField(Field):
         db_index: bool = False,
         primary_key: bool = False,
         db_column: str | None = None,
+        auto_increment: bool = False,
     ) -> None: ...
 
 class BigIntegerField(Field):
-    def __init__(self, *, null: bool = False, **kwargs: Any) -> None: ...
+    def __init__(
+        self,
+        *,
+        null: bool = False,
+        default: Any = ...,
+        unique: bool = False,
+        db_index: bool = False,
+        primary_key: bool = False,
+        db_column: str | None = None,
+        auto_increment: bool = False,
+    ) -> None: ...
 
-class SmallIntegerField(IntegerField): ...
+class SmallIntegerField(Field):
+    def __init__(
+        self,
+        *,
+        null: bool = False,
+        default: Any = ...,
+        unique: bool = False,
+        db_index: bool = False,
+        primary_key: bool = False,
+        db_column: str | None = None,
+        auto_increment: bool = False,
+    ) -> None: ...
 class PositiveIntegerField(IntegerField): ...
 class PositiveBigIntegerField(IntegerField): ...
 class PositiveSmallIntegerField(IntegerField): ...

@@ -1,6 +1,4 @@
 from ormpi._core import (
-    AutoField as AutoField,
-    BigAutoField as BigAutoField,
     BigIntegerField as BigIntegerField,
     BinaryField as BinaryField,
     BooleanField as BooleanField,
@@ -29,7 +27,6 @@ from ormpi._core import (
     SET_DEFAULT as SET_DEFAULT,
     SET_NULL as SET_NULL,
     SlugField as SlugField,
-    SmallAutoField as SmallAutoField,
     SmallIntegerField as SmallIntegerField,
     TextField as TextField,
     TimeField as TimeField,

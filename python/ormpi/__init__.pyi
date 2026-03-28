@@ -27,8 +27,6 @@ from ormpi.exceptions import (
     ValidationError as ValidationError,
 )
 from ormpi.fields import (
-    AutoField as AutoField,
-    BigAutoField as BigAutoField,
     BigIntegerField as BigIntegerField,
     BinaryField as BinaryField,
     BooleanField as BooleanField,
@@ -57,7 +55,6 @@ from ormpi.fields import (
     SET_DEFAULT as SET_DEFAULT,
     SET_NULL as SET_NULL,
     SlugField as SlugField,
-    SmallAutoField as SmallAutoField,
     SmallIntegerField as SmallIntegerField,
     TextField as TextField,
     TimeField as TimeField,

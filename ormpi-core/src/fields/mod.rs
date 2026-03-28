@@ -18,6 +18,7 @@ pub struct FieldDef {
     pub primary_key: bool,
     pub editable: bool,
     pub choices: Vec<(OrmpiValue, String)>, // (db_value, display_label)
+    pub auto_increment: bool,
     pub auto_now: bool,
     pub auto_now_add: bool,
     pub max_length: Option<u32>,
@@ -64,18 +65,6 @@ impl FieldDef {
         let mut col = sea_query::ColumnDef::new(sea_query::Alias::new(&col_name));
 
         match &self.field_type {
-            FieldType::AutoInt => {
-                col.integer().auto_increment().primary_key();
-                return Some(col);
-            }
-            FieldType::AutoBigInt => {
-                col.big_integer().auto_increment().primary_key();
-                return Some(col);
-            }
-            FieldType::AutoSmallInt => {
-                col.small_integer().auto_increment().primary_key();
-                return Some(col);
-            }
             FieldType::SmallInt | FieldType::PositiveSmallInt => {
                 col.small_integer();
             }
@@ -139,6 +128,9 @@ impl FieldDef {
         if self.primary_key {
             col.primary_key();
         }
+        if self.auto_increment {
+            col.auto_increment();
+        }
         if !self.null {
             col.not_null();
         }
@@ -186,6 +178,7 @@ mod tests {
             primary_key: false,
             editable: true,
             choices: vec![],
+            auto_increment: false,
             auto_now: false,
             auto_now_add: false,
             max_length: None,
@@ -230,7 +223,9 @@ mod tests {
 
     #[test]
     fn test_auto_int_primary_key() {
-        let f = make_field(FieldType::AutoInt);
+        let mut f = make_field(FieldType::Int);
+        f.primary_key = true;
+        f.auto_increment = true;
         let col = f.to_column_def().unwrap();
         let sql = Table::create()
             .table(sea_query::Alias::new("t"))

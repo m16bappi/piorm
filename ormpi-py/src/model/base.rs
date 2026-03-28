@@ -354,7 +354,7 @@ pub fn _register_model_class(cls: Bound<'_, PyType>) -> PyResult<()> {
         }
     }
 
-    // Auto-add BigAutoField `id` when no explicit primary key is declared.
+    // Auto-add BigIntegerField `id` (auto_increment) when no explicit PK is declared.
     if !has_pk {
         fields.insert(
             "id".to_string(),
@@ -362,7 +362,7 @@ pub fn _register_model_class(cls: Bound<'_, PyType>) -> PyResult<()> {
                 name: "id".to_string(),
                 attname: "id".to_string(),
                 db_column: None,
-                field_type: FieldType::AutoBigInt,
+                field_type: FieldType::BigInt,
                 primary_key: true,
                 null: false,
                 unique: false,
@@ -370,6 +370,7 @@ pub fn _register_model_class(cls: Bound<'_, PyType>) -> PyResult<()> {
                 editable: false,
                 default: DefaultValue::None,
                 choices: vec![],
+                auto_increment: true,
                 auto_now: false,
                 auto_now_add: false,
                 max_length: None,
@@ -423,10 +424,9 @@ pub fn _register_model_class(cls: Bound<'_, PyType>) -> PyResult<()> {
 fn extract_field_def(obj: &Bound<'_, PyAny>) -> PyResult<Option<FieldDef>> {
     use crate::fields::relational::{PyForeignKey, PyManyToManyField, PyOneToOneField};
     use crate::fields::scalar::{
-        PyAutoField, PyBigAutoField, PyBigIntegerField, PyBooleanField, PyCharField,
-        PyDecimalField, PyEmailField, PyFloatField, PyIntegerField, PyPositiveBigIntegerField,
-        PyPositiveIntegerField, PyPositiveSmallIntegerField, PySlugField, PySmallIntegerField,
-        PyTextField, PyUrlField,
+        PyBigIntegerField, PyBooleanField, PyCharField, PyDecimalField, PyEmailField, PyFloatField,
+        PyIntegerField, PyPositiveBigIntegerField, PyPositiveIntegerField,
+        PyPositiveSmallIntegerField, PySlugField, PySmallIntegerField, PyTextField, PyUrlField,
     };
     use crate::fields::special::{
         PyBinaryField, PyGenericIPAddressField, PyIPAddressField, PyJSONField, PyUUIDField,
@@ -441,8 +441,6 @@ fn extract_field_def(obj: &Bound<'_, PyAny>) -> PyResult<Option<FieldDef>> {
         };
     }
 
-    try_field!(PyAutoField);
-    try_field!(PyBigAutoField);
     try_field!(PyIntegerField);
     try_field!(PyBigIntegerField);
     try_field!(PySmallIntegerField);
