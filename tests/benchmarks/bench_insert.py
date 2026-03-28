@@ -32,54 +32,50 @@ class BenchAuthor(ormpi.Model):
         db_table = "bench_authors"
 
 
-# ---------------------------------------------------------------------------
-# Loop-aware helpers
-# ---------------------------------------------------------------------------
+def _run_async(loop: asyncio.AbstractEventLoop, fn, *args, **kwargs):
+    """
+    Run an async function on the given loop.
+    The function must be defined as `async def fn(...)`.
+    """
+    return loop.run_until_complete(fn(*args, **kwargs))
 
 
-def _exec(loop: asyncio.AbstractEventLoop, coro):
-    """Run a coroutine or awaitable on the given loop."""
-    if asyncio.iscoroutine(coro):
-        return loop.run_until_complete(coro)
-    # QuerySet / other awaitable: wrap in a coroutine
-    async def _wrap():
-        return await coro
-    return loop.run_until_complete(_wrap())
-
-
-@pytest.fixture
-def loop():
-    """Provide a dedicated event loop for synchronous benchmark functions."""
+@pytest.fixture(scope="module")
+def bench_loop():
+    """Persistent event loop for the benchmark module."""
     lp = asyncio.new_event_loop()
+    asyncio.set_event_loop(lp)
     yield lp
+    lp.run_until_complete(lp.shutdown_asyncgens())
     lp.close()
+    asyncio.set_event_loop(None)
+
+
+@pytest.fixture(scope="module")
+def populated_db(bench_loop):
+    """Module-scoped: configure DB and insert 1000 rows once."""
+
+    async def setup():
+        await ormpi.configure({"default": {"ENGINE": "sqlite", "NAME": ":memory:"}})
+        await create_table("bench.BenchAuthor")
+        rows = [
+            BenchAuthor(name=f"A{i}", email=f"a{i}@bench.com", age=i % 80)
+            for i in range(1000)
+        ]
+        await BenchAuthor.objects.bulk_create(rows)
+
+    bench_loop.run_until_complete(setup())
+    yield bench_loop
+    # In-memory SQLite: no explicit teardown needed; process cleanup handles it.
 
 
 # ---------------------------------------------------------------------------
-# INSERT benchmarks
+# INSERT benchmarks (each round is self-contained: setup+insert+teardown)
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.benchmark(group="insert")
-def test_single_insert(benchmark, loop):
-    """Single-row INSERT via ORM create()."""
-    _exec(loop, ormpi.configure({"default": {"ENGINE": "sqlite", "NAME": ":memory:"}}))
-    _exec(loop, create_table("bench.BenchAuthor"))
-
-    counter = [0]
-
-    def insert_one():
-        counter[0] += 1
-        _exec(loop, BenchAuthor.objects.create(
-            name=f"T{counter[0]}", email=f"t{counter[0]}@bench.com"
-        ))
-
-    benchmark(insert_one)
-    _exec(loop, ormpi.close())
 
 
 @pytest.mark.benchmark(group="bulk-insert")
-def test_bulk_insert_1000(benchmark, loop):
+def test_bulk_insert_1000(benchmark):
     """bulk_create() inserting 1000 rows (full round-trip per round)."""
 
     def do_bulk():
@@ -90,74 +86,100 @@ def test_bulk_insert_1000(benchmark, loop):
             count = await BenchAuthor.objects.bulk_create(rows)
             assert count == 1000
             await ormpi.close()
-        loop.run_until_complete(_inner())
+
+        asyncio.run(_inner())
 
     benchmark(do_bulk)
 
 
+@pytest.mark.benchmark(group="insert")
+def test_single_insert(benchmark):
+    """Single-row INSERT (full round-trip per 100 rounds)."""
+    counter = [0]
+
+    def do_insert():
+        async def _inner():
+            counter[0] += 1
+            await BenchAuthor.objects.create(
+                name=f"T{counter[0]}", email=f"t{counter[0]}@bench.com"
+            )
+
+        asyncio.run(_inner())
+
+    # Setup: fresh DB. Teardown skipped — in-memory SQLite is ephemeral.
+    asyncio.run(_setup_empty())
+    benchmark(do_insert)
+
+
+async def _setup_empty():
+    await ormpi.configure({"default": {"ENGINE": "sqlite", "NAME": ":memory:"}})
+    await create_table("bench.BenchAuthor")
+
+
 # ---------------------------------------------------------------------------
-# SELECT benchmarks — populated table (1000 rows)
+# SELECT benchmarks — reuse populated_db
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def populated_loop():
-    """Event loop with 1000 rows pre-inserted."""
-    lp = asyncio.new_event_loop()
-
-    async def setup():
-        await ormpi.configure({"default": {"ENGINE": "sqlite", "NAME": ":memory:"}})
-        await create_table("bench.BenchAuthor")
-        rows = [BenchAuthor(name=f"A{i}", email=f"a{i}@bench.com", age=i % 80)
-                for i in range(1000)]
-        await BenchAuthor.objects.bulk_create(rows)
-
-    lp.run_until_complete(setup())
-    yield lp
-    lp.run_until_complete(ormpi.close())
-    lp.close()
 
 
 @pytest.mark.benchmark(group="select")
-def test_full_table_scan(benchmark, populated_loop):
+def test_full_table_scan(benchmark, populated_db):
     """Full table scan — await all() over 1000 rows."""
+    lp = populated_db
 
     def scan():
-        result = _exec(populated_loop, BenchAuthor.objects.all())
-        assert len(result) == 1000
+        async def _inner():
+            result = await BenchAuthor.objects.all()
+            assert len(result) == 1000
+
+        lp.run_until_complete(_inner())
 
     benchmark(scan)
 
 
 @pytest.mark.benchmark(group="filter")
-def test_filtered_query(benchmark, populated_loop):
+def test_filtered_query(benchmark, populated_db):
     """Filtered SELECT (age__gte=50) over 1000 rows."""
+    lp = populated_db
 
     def query():
-        _exec(populated_loop, BenchAuthor.objects.filter(age__gte=50))
+        async def _inner():
+            await BenchAuthor.objects.filter(age__gte=50)
+
+        lp.run_until_complete(_inner())
 
     benchmark(query)
 
 
 @pytest.mark.benchmark(group="count")
-def test_count_query(benchmark, populated_loop):
+def test_count_query(benchmark, populated_db):
     """COUNT(*) over 1000 rows."""
+    lp = populated_db
 
     def count():
-        n = _exec(populated_loop, BenchAuthor.objects.count())
-        assert n == 1000
+        async def _inner():
+            n = await BenchAuthor.objects.count()
+            assert n == 1000
+
+        lp.run_until_complete(_inner())
 
     benchmark(count)
 
 
 @pytest.mark.benchmark(group="get")
-def test_get_by_pk(benchmark, populated_loop):
+def test_get_by_pk(benchmark, populated_db):
     """Fetch a single row by PK."""
-    # Grab a known PK from the table
-    rows = _exec(populated_loop, BenchAuthor.objects.filter(name="A42"))
-    pk = rows[0].pk
+    lp = populated_db
+
+    async def _find_pk():
+        rows = await BenchAuthor.objects.filter(name="A42")
+        return rows[0].pk
+
+    pk = lp.run_until_complete(_find_pk())
 
     def get_one():
-        _exec(populated_loop, BenchAuthor.objects.get(pk=pk))
+        async def _inner():
+            await BenchAuthor.objects.get(pk=pk)
+
+        lp.run_until_complete(_inner())
 
     benchmark(get_one)
