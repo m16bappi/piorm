@@ -4,6 +4,7 @@ pub mod fields;
 pub mod model;
 pub mod query;
 pub mod routing;
+pub mod transaction;
 mod runtime;
 
 use std::collections::HashMap;
@@ -109,6 +110,78 @@ fn configure(
         ormpi_core::registry::initialize(configs)
             .await
             .map_err(ormpi_err)
+    };
+    pyo3_async_runtimes::tokio::future_into_py(py, future).map(|b| b.into())
+}
+
+/// begin(using=None) -> Awaitable[Transaction]  — open a database transaction
+#[pyfunction]
+#[pyo3(signature = (using = None))]
+fn begin(py: Python<'_>, using: Option<String>) -> PyResult<PyObject> {
+    transaction::py_begin(py, using)
+}
+
+/// create_savepoint(txn) -> Awaitable[str]  — execute SAVEPOINT and return name
+#[pyfunction]
+fn create_savepoint(py: Python<'_>, txn: &transaction::PyTransaction) -> PyResult<PyObject> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let sp_name = format!("sp_{:08x}", nanos);
+    let sql = format!("SAVEPOINT {sp_name}");
+    let arc = txn.inner_arc();
+
+    let future = async move {
+        let mut guard = arc.lock().await;
+        let inner = guard.as_mut().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("Transaction already consumed")
+        })?;
+        inner.execute_raw(&sql).await.map_err(ormpi_err)?;
+        Ok(sp_name)
+    };
+    pyo3_async_runtimes::tokio::future_into_py(py, future).map(|b| b.into())
+}
+
+/// release_savepoint(txn, name) -> Awaitable[None]  — RELEASE SAVEPOINT
+#[pyfunction]
+fn release_savepoint(
+    py: Python<'_>,
+    txn: &transaction::PyTransaction,
+    name: String,
+) -> PyResult<PyObject> {
+    let sql = format!("RELEASE SAVEPOINT {name}");
+    let arc = txn.inner_arc();
+
+    let future = async move {
+        let mut guard = arc.lock().await;
+        let inner = guard.as_mut().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("Transaction already consumed")
+        })?;
+        inner.execute_raw(&sql).await.map_err(ormpi_err)?;
+        Python::with_gil(|py| Ok::<_, PyErr>(py.None()))
+    };
+    pyo3_async_runtimes::tokio::future_into_py(py, future).map(|b| b.into())
+}
+
+/// rollback_to_savepoint(txn, name) -> Awaitable[None]  — ROLLBACK TO SAVEPOINT
+#[pyfunction]
+fn rollback_to_savepoint(
+    py: Python<'_>,
+    txn: &transaction::PyTransaction,
+    name: String,
+) -> PyResult<PyObject> {
+    let sql = format!("ROLLBACK TO SAVEPOINT {name}");
+    let arc = txn.inner_arc();
+
+    let future = async move {
+        let mut guard = arc.lock().await;
+        let inner = guard.as_mut().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("Transaction already consumed")
+        })?;
+        inner.execute_raw(&sql).await.map_err(ormpi_err)?;
+        Python::with_gil(|py| Ok::<_, PyErr>(py.None()))
     };
     pyo3_async_runtimes::tokio::future_into_py(py, future).map(|b| b.into())
 }
@@ -311,10 +384,15 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create_table, m)?)?;
     m.add_function(wrap_pyfunction!(create_all_tables, m)?)?;
     m.add_function(wrap_pyfunction!(run_cli, m)?)?;
+    m.add_function(wrap_pyfunction!(begin, m)?)?;
+    m.add_function(wrap_pyfunction!(create_savepoint, m)?)?;
+    m.add_function(wrap_pyfunction!(release_savepoint, m)?)?;
+    m.add_function(wrap_pyfunction!(rollback_to_savepoint, m)?)?;
     fields::register_fields(m)?;
     model::register_model(m)?;
     query::register_query(m)?;
     db::register_db(m)?;
+    m.add_class::<transaction::PyTransaction>()?;
     Ok(())
 }
 

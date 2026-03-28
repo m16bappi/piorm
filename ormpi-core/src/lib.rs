@@ -9,6 +9,7 @@ pub mod pool;
 pub mod query;
 pub mod registry;
 pub mod row;
+pub mod transaction;
 pub mod value;
 
 pub use backend::{DatabaseBackend, PlaceholderStyle, QueryBackend};
