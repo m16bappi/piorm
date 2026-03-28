@@ -11,6 +11,6 @@ pub use file::{MigrationFile, MigrationMeta};
 pub use graph::MigrationGraph;
 pub use operations::{
     AddFieldOp, AlterFieldOp, AlterModelOptionsOp, CreateModelOp, DeleteModelOp,
-    MigrationOperation, OpType, RemoveFieldOp, StoredField, StoredOperation,
+    MigrationOperation, OpType, RemoveFieldOp, StoredField, StoredModelOptions, StoredOperation,
 };
 pub use state::{FieldState, ModelOptions, ModelState, ProjectState};

@@ -26,6 +26,8 @@ pub trait MigrationOperation: std::fmt::Debug + Send + Sync {
     fn database_backwards(&self, backend: &QueryBackend) -> Vec<String>;
     /// Human-readable description.
     fn describe(&self) -> String;
+    /// Convert to serializable form for writing to a migration file.
+    fn to_stored(&self) -> StoredOperation;
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +247,15 @@ impl MigrationOperation for CreateModelOp {
 
     fn primary_identifier(&self) -> String { self.name.clone() }
     fn describe(&self) -> String { format!("Create model {}", self.name) }
+
+    fn to_stored(&self) -> StoredOperation {
+        StoredOperation::CreateModel {
+            app_label: self.app_label.clone(),
+            name: self.name.clone(),
+            fields: self.fields.iter().map(StoredField::from).collect(),
+            options: StoredModelOptions::from(&self.options),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -312,6 +323,15 @@ impl MigrationOperation for DeleteModelOp {
 
     fn primary_identifier(&self) -> String { self.name.clone() }
     fn describe(&self) -> String { format!("Delete model {}", self.name) }
+
+    fn to_stored(&self) -> StoredOperation {
+        StoredOperation::DeleteModel {
+            app_label: self.app_label.clone(),
+            name: self.name.clone(),
+            fields: self.fields.iter().map(StoredField::from).collect(),
+            options: StoredModelOptions::from(&self.options),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -372,6 +392,14 @@ impl MigrationOperation for AddFieldOp {
         format!("{}_{}", self.model.to_lowercase(), self.field.name)
     }
     fn describe(&self) -> String { format!("Add field {} to {}", self.field.name, self.model) }
+
+    fn to_stored(&self) -> StoredOperation {
+        StoredOperation::AddField {
+            app_label: self.app_label.clone(),
+            model: self.model.clone(),
+            field: StoredField::from(&self.field),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -436,6 +464,15 @@ impl MigrationOperation for RemoveFieldOp {
         format!("{}_{}", self.model.to_lowercase(), self.name)
     }
     fn describe(&self) -> String { format!("Remove field {} from {}", self.name, self.model) }
+
+    fn to_stored(&self) -> StoredOperation {
+        StoredOperation::RemoveField {
+            app_label: self.app_label.clone(),
+            model: self.model.clone(),
+            name: self.name.clone(),
+            field: StoredField::from(&self.field),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -493,6 +530,15 @@ impl MigrationOperation for AlterFieldOp {
         format!("{}_{}", self.model.to_lowercase(), self.name)
     }
     fn describe(&self) -> String { format!("Alter field {} on {}", self.name, self.model) }
+
+    fn to_stored(&self) -> StoredOperation {
+        StoredOperation::AlterField {
+            app_label: self.app_label.clone(),
+            model: self.model.clone(),
+            old_field: StoredField::from(&self.old_field),
+            new_field: StoredField::from(&self.new_field),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -522,6 +568,14 @@ impl MigrationOperation for AlterModelOptionsOp {
 
     fn primary_identifier(&self) -> String { self.model.to_lowercase() }
     fn describe(&self) -> String { format!("Alter model options for {}", self.model) }
+
+    fn to_stored(&self) -> StoredOperation {
+        StoredOperation::AlterModelOptions {
+            app_label: self.app_label.clone(),
+            model: self.model.clone(),
+            options: StoredModelOptions::from(&self.options),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
