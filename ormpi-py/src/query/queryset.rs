@@ -1,0 +1,1603 @@
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList, PySet, PyTuple};
+
+use ormpi_core::model::def::OrderSpec;
+use ormpi_core::model::registry::ModelRegistry;
+use ormpi_core::query::filter::{FilterNode, parse_filter_kwarg};
+use ormpi_core::query::state::{QueryState, ResultType, SelectFields};
+use ormpi_core::row::OrmpiRow;
+use ormpi_core::value::OrmpiValue;
+
+use crate::model::instance::py_to_ormpi_value;
+use crate::ormpi_err;
+use crate::query::q::PyQ;
+
+// ── suppress unused-import warnings from helpers ──────────────────────────────
+#[allow(unused_imports)]
+use ormpi_core::query::evaluate::fetch_by_column_in;
+#[allow(unused_imports)]
+use ormpi_core::query::join::find_reverse_relation;
+
+// ── Helper: clone an Option<PyObject> while holding the GIL ──────────────────
+
+fn clone_model_class(py: Python<'_>, mc: &Option<PyObject>) -> Option<PyObject> {
+    mc.as_ref().map(|obj| obj.clone_ref(py))
+}
+
+/// Python-facing QuerySet — accumulates query state, evaluates lazily.
+#[pyclass(name = "QuerySet")]
+pub struct PyQuerySet {
+    pub state: QueryState,
+    pub model_class: Option<PyObject>,
+}
+
+impl PyQuerySet {
+    pub fn new(app_label: String, model_name: String) -> Self {
+        Self {
+            state: QueryState::new(app_label, model_name),
+            model_class: None,
+        }
+    }
+
+    pub fn new_with_class(app_label: String, model_name: String, model_class: PyObject) -> Self {
+        Self {
+            state: QueryState::new(app_label, model_name),
+            model_class: Some(model_class),
+        }
+    }
+}
+
+// ── Public helpers used by iter.rs ────────────────────────────────────────────
+
+pub(crate) async fn fetch_rows_for_state(state: &QueryState) -> ormpi_core::Result<Vec<OrmpiRow>> {
+    use ormpi_core::backend::QueryBackend;
+    use ormpi_core::query::evaluate::evaluate;
+    use ormpi_core::registry::DatabaseRegistry;
+
+    let alias = state.database.clone().unwrap_or_else(|| "default".to_string());
+    let pool = {
+        let reg = DatabaseRegistry::global();
+        let guard = reg.read().unwrap();
+        guard.get_pool(&alias)?.clone()
+    };
+    let backend = QueryBackend(pool.backend());
+    let model_def = {
+        let reg = ModelRegistry::global();
+        let guard = reg.read().unwrap();
+        guard
+            .get(&state.app_label, &state.model_name)
+            .ok_or_else(|| {
+                ormpi_core::OrmpiError::Other(format!(
+                    "Model {}.{} not in registry",
+                    state.app_label, state.model_name
+                ))
+            })?
+            .clone()
+    };
+    evaluate(state, &pool, &backend, &model_def).await
+}
+
+pub(crate) fn row_to_instance(
+    py: Python<'_>,
+    row: &OrmpiRow,
+    model_class: &PyObject,
+) -> PyResult<PyObject> {
+    // Call the class with no args to create a bare instance.
+    let instance = model_class.bind(py).call0()?;
+
+    // Populate _ormpi_values from the row.
+    let values = PyDict::new_bound(py);
+    for (col_name, ormpi_val) in &row.values {
+        let py_val = ormpi_value_to_py(py, ormpi_val);
+        values.set_item(col_name, py_val)?;
+    }
+    instance.setattr("_ormpi_values", &values)?;
+
+    // Mark as not-adding (came from DB).
+    let state = PyDict::new_bound(py);
+    state.set_item("adding", false)?;
+    state.set_item("db", py.None())?;
+    instance.setattr("_ormpi_state", &state)?;
+
+    // Clear dirty set.
+    let dirty = PySet::empty_bound(py)?;
+    instance.setattr("_ormpi_dirty", &dirty)?;
+
+    Ok(instance.into())
+}
+
+pub(crate) fn ormpi_value_to_py(py: Python<'_>, value: &OrmpiValue) -> PyObject {
+    match value {
+        OrmpiValue::Null => py.None(),
+        OrmpiValue::Bool(b) => b.into_py(py),
+        OrmpiValue::Int(i) => i.into_py(py),
+        OrmpiValue::Float(f) => f.into_py(py),
+        OrmpiValue::Text(s) => s.into_py(py),
+        OrmpiValue::Bytes(b) => b.clone().into_py(py),
+        OrmpiValue::Uuid(u) => u.to_string().into_py(py),
+        OrmpiValue::Json(j) => j.to_string().into_py(py),
+        OrmpiValue::Decimal(d) => d.to_string().into_py(py),
+        OrmpiValue::Date(d) => d.to_string().into_py(py),
+        OrmpiValue::Time(t) => t.to_string().into_py(py),
+        OrmpiValue::DateTime(dt) => dt.to_string().into_py(py),
+        OrmpiValue::DateTimeTz(dt) => dt.to_string().into_py(py),
+    }
+}
+
+// ── Helper: build result list from rows ──────────────────────────────────────
+
+fn rows_to_py(
+    py: Python<'_>,
+    rows: Vec<OrmpiRow>,
+    result_type: &ResultType,
+    model_class: &Option<PyObject>,
+) -> PyResult<PyObject> {
+    match result_type {
+        ResultType::Values => {
+            let dicts: PyResult<Vec<PyObject>> = rows
+                .iter()
+                .map(|row| {
+                    let d = PyDict::new_bound(py);
+                    for (k, v) in &row.values {
+                        d.set_item(k, ormpi_value_to_py(py, v))?;
+                    }
+                    Ok(d.into())
+                })
+                .collect();
+            Ok(PyList::new_bound(py, dicts?).into())
+        }
+        _ => match model_class {
+            Some(cls) => {
+                let instances: PyResult<Vec<PyObject>> =
+                    rows.iter().map(|row| row_to_instance(py, row, cls)).collect();
+                Ok(PyList::new_bound(py, instances?).into())
+            }
+            None => Ok(PyList::empty_bound(py).into()),
+        },
+    }
+}
+
+// ── select_related / prefetch_related helpers ─────────────────────────────────
+
+/// Split each joined row into a base instance + per-path related value dicts.
+/// Columns prefixed with `{path}__` belong to the related model.
+fn hydrate_with_select_related(
+    py: Python<'_>,
+    rows: &[OrmpiRow],
+    model_class: &Option<PyObject>,
+    select_related_fields: &[String],
+) -> PyResult<Vec<PyObject>> {
+    rows.iter()
+        .map(|row| {
+            // Partition columns: base vs. related.
+            let mut base_values = OrmpiRow {
+                columns: vec![],
+                values: indexmap::IndexMap::new(),
+            };
+            // related_col_map: path → list of (stripped_col, value)
+            let mut related_cols: std::collections::HashMap<
+                String,
+                Vec<(String, OrmpiValue)>,
+            > = std::collections::HashMap::new();
+
+            for (col_name, value) in &row.values {
+                let mut matched = false;
+                for path in select_related_fields {
+                    let prefix = format!("{}__", path);
+                    if let Some(stripped) = col_name.strip_prefix(&prefix) {
+                        related_cols
+                            .entry(path.clone())
+                            .or_default()
+                            .push((stripped.to_string(), value.clone()));
+                        matched = true;
+                        break;
+                    }
+                }
+                if !matched {
+                    base_values.columns.push(col_name.clone());
+                    base_values.values.insert(col_name.clone(), value.clone());
+                }
+            }
+
+            // Build the base instance.
+            let instance = match model_class {
+                Some(cls) => row_to_instance(py, &base_values, cls)?,
+                None => return Ok(py.None()),
+            };
+
+            // Attach related value dicts as `_ormpi_cache_{path}`.
+            for (path, cols) in &related_cols {
+                let cache_key = format!("_ormpi_cache_{}", path);
+                let rel_dict = PyDict::new_bound(py);
+                let mut all_null = true;
+                for (k, v) in cols {
+                    let py_val = ormpi_value_to_py(py, v);
+                    if !py_val.is_none(py) {
+                        all_null = false;
+                    }
+                    rel_dict.set_item(k, py_val)?;
+                }
+                // If all related columns are NULL the FK was NULL (LEFT JOIN miss).
+                if all_null {
+                    instance.bind(py).setattr(cache_key.as_str(), py.None())?;
+                } else {
+                    instance.bind(py).setattr(cache_key.as_str(), &rel_dict)?;
+                }
+            }
+
+            Ok(instance)
+        })
+        .collect()
+}
+
+/// For each `prefetch_fields` entry, resolve the reverse FK and batch-fetch
+/// related rows.  Returns `(lookup_name, related_rows, fk_column)` tuples.
+async fn fetch_prefetch_data(
+    state: &ormpi_core::query::state::QueryState,
+    base_rows: &[OrmpiRow],
+) -> PyResult<Vec<(String, Vec<OrmpiRow>, String)>> {
+    use ormpi_core::backend::QueryBackend;
+    use ormpi_core::model::registry::ModelRegistry;
+    use ormpi_core::query::evaluate::fetch_by_column_in;
+    use ormpi_core::query::join::find_reverse_relation;
+    use ormpi_core::registry::DatabaseRegistry;
+
+    let mut result = vec![];
+
+    let db_alias = state.database.clone().unwrap_or_else(|| "default".to_string());
+    let pool = {
+        let reg = DatabaseRegistry::global();
+        let guard = reg.read().unwrap();
+        guard
+            .get_pool(&db_alias)
+            .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?
+            .clone()
+    };
+    let backend = QueryBackend(pool.backend());
+
+    for lookup in &state.prefetch_fields {
+        // Resolve reverse relation.
+        let (rel_table, fk_col, base_pk) = {
+            let reg = ModelRegistry::global();
+            let guard = reg.read().unwrap();
+            let base_model = guard
+                .get(&state.app_label, &state.model_name)
+                .ok_or_else(|| {
+                    Python::with_gil(|_py| {
+                        pyo3::exceptions::PyRuntimeError::new_err("base model not found")
+                    })
+                })?;
+
+            match find_reverse_relation(&*guard, base_model, lookup) {
+                Some((rel_model, fk_col, base_pk)) => {
+                    (rel_model.table_name.clone(), fk_col, base_pk)
+                }
+                None => {
+                    return Err(Python::with_gil(|_py| {
+                        pyo3::exceptions::PyRuntimeError::new_err(format!(
+                            "Cannot resolve prefetch_related '{}' for model '{}'",
+                            lookup, state.model_name
+                        ))
+                    }))
+                }
+            }
+        };
+
+        // Collect base PKs.
+        let pk_vals: Vec<ormpi_core::value::OrmpiValue> = base_rows
+            .iter()
+            .filter_map(|row| row.get(&base_pk).cloned())
+            .collect();
+
+        let rel_rows = fetch_by_column_in(&rel_table, &fk_col, &pk_vals, &pool, &backend)
+            .await
+            .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+        result.push((lookup.clone(), rel_rows, fk_col));
+    }
+
+    Ok(result)
+}
+
+/// Attach prefetched rows to base instances under `_prefetch_cache_{lookup}`.
+/// Groups `rel_rows` by `fk_col` value and matches them to instances by pk.
+fn attach_prefetch_cache(
+    py: Python<'_>,
+    instances: &[PyObject],
+    rel_rows: &[OrmpiRow],
+    lookup: &str,
+    fk_col: &str,
+) -> PyResult<()> {
+    use std::collections::HashMap;
+
+    // Serialize an OrmpiValue to a stable string key for grouping.
+    fn ov_key(v: &OrmpiValue) -> String {
+        match v {
+            OrmpiValue::Int(i) => format!("{}", i),
+            OrmpiValue::Float(f) => format!("{}", f),
+            OrmpiValue::Text(s) => s.clone(),
+            OrmpiValue::Bool(b) => format!("{}", b),
+            _ => format!("{:?}", v),
+        }
+    }
+
+    // Group rel_rows by fk value.
+    let mut grouped: HashMap<String, Vec<&OrmpiRow>> = HashMap::new();
+    for row in rel_rows {
+        if let Some(fk_val) = row.get(fk_col) {
+            grouped.entry(ov_key(fk_val)).or_default().push(row);
+        }
+    }
+
+    let cache_key = format!("_prefetch_cache_{}", lookup);
+    for instance in instances {
+        let inst_ref = instance.bind(py);
+
+        // Extract pk value as string key.
+        let pk_key = inst_ref
+            .getattr("_ormpi_values")
+            .ok()
+            .and_then(|d| d.get_item("id").ok())
+            .and_then(|v| crate::model::instance::py_to_ormpi_value(&v).ok())
+            .map(|ov| ov_key(&ov))
+            .unwrap_or_default();
+
+        let rows_for_inst = grouped.get(&pk_key).cloned().unwrap_or_default();
+        let rel_dicts: Vec<PyObject> = rows_for_inst
+            .iter()
+            .map(|row| {
+                let d = PyDict::new_bound(py);
+                for (k, v) in &row.values {
+                    d.set_item(k, ormpi_value_to_py(py, v))?;
+                }
+                Ok(d.into())
+            })
+            .collect::<PyResult<_>>()?;
+        let list = PyList::new_bound(py, rel_dicts);
+        inst_ref.setattr(cache_key.as_str(), list)?;
+    }
+
+    Ok(())
+}
+
+// ── pymethods ─────────────────────────────────────────────────────────────────
+
+#[pymethods]
+impl PyQuerySet {
+    /// Return a clone of this queryset (no-op at this stage).
+    fn all(slf: Bound<'_, Self>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+        let new_qs = PyQuerySet {
+            state: slf.borrow().state.clone(),
+            model_class,
+        };
+        Ok(Py::new(py, new_qs)?.into_py(py))
+    }
+
+    /// Return an always-empty queryset by injecting an impossible filter.
+    fn none(slf: Bound<'_, Self>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let mut state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+        // pk IS NULL → never matches any real row.
+        state.filters.filters.push(FilterNode::Lookup {
+            field_path: vec!["pk".to_string()],
+            lookup: ormpi_core::query::filter::Lookup::IsNull,
+            value: ormpi_core::value::OrmpiValue::Bool(true),
+        });
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
+    }
+
+    /// Add WHERE conditions — positional Q objects and/or keyword lookups.
+    #[pyo3(signature = (*args, **kwargs))]
+    fn filter(
+        slf: Bound<'_, Self>,
+        args: &Bound<'_, PyTuple>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<PyObject> {
+        let py = slf.py();
+        let mut state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+
+        // Positional Q objects
+        for arg in args.iter() {
+            let q = arg.downcast::<PyQ>().map_err(|_| {
+                pyo3::exceptions::PyTypeError::new_err(
+                    "filter() positional arguments must be Q objects",
+                )
+            })?;
+            state
+                .filters
+                .filters
+                .push(FilterNode::Q(q.borrow().node.clone()));
+        }
+
+        // Keyword filters
+        if let Some(kw) = kwargs {
+            let reg = ModelRegistry::global();
+            let guard = reg.read().unwrap();
+            let model_def = guard
+                .get(&state.app_label, &state.model_name)
+                .ok_or_else(|| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!(
+                        "Model {}.{} not found in registry",
+                        state.app_label, state.model_name
+                    ))
+                })?;
+
+            for (k, v) in kw.iter() {
+                let key: String = k.extract()?;
+                let value = py_to_ormpi_value(&v)?;
+                let node = parse_filter_kwarg(&key, value, model_def, &guard)
+                    .map_err(ormpi_err)?;
+                state.filters.filters.push(node);
+            }
+        }
+
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
+    }
+
+    /// Add negated WHERE conditions.
+    #[pyo3(signature = (*args, **kwargs))]
+    fn exclude(
+        slf: Bound<'_, Self>,
+        args: &Bound<'_, PyTuple>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<PyObject> {
+        let py = slf.py();
+        let mut state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+
+        for arg in args.iter() {
+            let q = arg.downcast::<PyQ>().map_err(|_| {
+                pyo3::exceptions::PyTypeError::new_err(
+                    "exclude() positional arguments must be Q objects",
+                )
+            })?;
+            state
+                .filters
+                .excludes
+                .push(FilterNode::Q(q.borrow().node.clone()));
+        }
+
+        if let Some(kw) = kwargs {
+            let reg = ModelRegistry::global();
+            let guard = reg.read().unwrap();
+            let model_def = guard
+                .get(&state.app_label, &state.model_name)
+                .ok_or_else(|| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!(
+                        "Model {}.{} not found in registry",
+                        state.app_label, state.model_name
+                    ))
+                })?;
+
+            for (k, v) in kw.iter() {
+                let key: String = k.extract()?;
+                let value = py_to_ormpi_value(&v)?;
+                let node = parse_filter_kwarg(&key, value, model_def, &guard)
+                    .map_err(ormpi_err)?;
+                state.filters.excludes.push(node);
+            }
+        }
+
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
+    }
+
+    /// Set ORDER BY.  Prefix with "-" for descending.  Accepts variadic string args.
+    #[pyo3(signature = (*fields))]
+    fn order_by(slf: Bound<'_, Self>, fields: Vec<String>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let mut state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+        state.order_by = fields.iter().map(|s| parse_order_spec(s)).collect();
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
+    }
+
+    /// Enable SELECT DISTINCT.
+    fn distinct(slf: Bound<'_, Self>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let mut state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+        state.distinct = true;
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
+    }
+
+    /// Override the database alias for this query.
+    fn using(slf: Bound<'_, Self>, alias: String) -> PyResult<PyObject> {
+        let py = slf.py();
+        let mut state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+        state.database = Some(alias);
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
+    }
+
+    /// Restrict columns to `fields` only.
+    fn only(slf: Bound<'_, Self>, fields: Vec<String>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let mut state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+        state.select_fields = SelectFields::Only(fields);
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
+    }
+
+    /// Defer loading of the specified columns.
+    fn defer(slf: Bound<'_, Self>, fields: Vec<String>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let mut state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+        state.select_fields = SelectFields::Defer(fields);
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
+    }
+
+    /// Return a QuerySet that evaluates to dicts instead of model instances.
+    fn values(slf: Bound<'_, Self>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let mut state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+        state.result_type = ResultType::Values;
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
+    }
+
+    /// Slice or index the queryset.
+    fn __getitem__(slf: Bound<'_, Self>, key: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        use pyo3::types::PySlice;
+        let py = slf.py();
+
+        if let Ok(idx) = key.extract::<i64>() {
+            let mut state = slf.borrow().state.clone();
+            let model_class = clone_model_class(py, &slf.borrow().model_class);
+            if idx >= 0 {
+                state.offset = Some(idx as u64);
+            }
+            state.limit = Some(1);
+            Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
+        } else if let Ok(slice) = key.downcast::<PySlice>() {
+            let indices = slice.indices(i64::MAX as _)?;
+            let mut state = slf.borrow().state.clone();
+            let model_class = clone_model_class(py, &slf.borrow().model_class);
+            let start = indices.start.max(0) as u64;
+            let stop = indices.stop.max(0) as u64;
+            if start > 0 {
+                state.offset = Some(start);
+            }
+            if stop > start {
+                state.limit = Some(stop - start);
+            }
+            Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
+        } else {
+            Err(pyo3::exceptions::PyTypeError::new_err(
+                "QuerySet indices must be integers or slices",
+            ))
+        }
+    }
+
+    /// Await the queryset — evaluates and returns a list of model instances (or dicts).
+    ///
+    /// `__await__` must return an *iterator* (has `__next__`), not just an awaitable.
+    /// `future_into_py` may return an asyncio.Future/Task whose `__await__()` returns
+    /// a FutureIter (the actual iterator), so we call `.__await__()` on it here.
+    fn __await__(slf: Bound<'_, Self>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+
+        let future = pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let rows = fetch_rows_for_state(&state)
+                .await
+                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+            // If prefetch_related is requested, batch-fetch each reverse relation.
+            let prefetch_data: Vec<(String, Vec<ormpi_core::row::OrmpiRow>, String)> =
+                if !state.prefetch_fields.is_empty() {
+                    fetch_prefetch_data(&state, &rows).await?
+                } else {
+                    vec![]
+                };
+
+            Python::with_gil(|py| {
+                // Hydrate rows: if select_related, split out related columns.
+                let instances: Vec<PyObject> = if !state.select_related_fields.is_empty() {
+                    hydrate_with_select_related(
+                        py,
+                        &rows,
+                        &model_class,
+                        &state.select_related_fields,
+                    )?
+                } else {
+                    // Normal path — reuse existing rows_to_py.
+                    let list_obj =
+                        rows_to_py(py, rows, &state.result_type, &model_class)?;
+                    list_obj.extract::<Vec<PyObject>>(py)?
+                };
+
+                // Attach prefetch caches.
+                for (lookup, rel_rows, fk_col) in &prefetch_data {
+                    attach_prefetch_cache(py, &instances, rel_rows, lookup, fk_col)?;
+                }
+
+                let list = PyList::new_bound(py, &instances);
+                Ok::<PyObject, PyErr>(list.into())
+            })
+        })?;
+
+        // Call `future.__await__()` to get the underlying iterator (FutureIter / coroutine).
+        future.call_method0("__await__").map(|b| b.into())
+    }
+
+    /// Return an async iterator over this queryset.
+    fn __aiter__(slf: Bound<'_, Self>) -> PyResult<PyObject> {
+        use crate::query::iter::PyAsyncIter;
+        let py = slf.py();
+        let state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+        let iter = PyAsyncIter {
+            state,
+            model_class,
+            cache: None,
+            pos: 0,
+        };
+        Ok(Py::new(py, iter)?.into_py(py))
+    }
+
+    /// Async — return the number of rows matching this queryset.
+    fn count(slf: Bound<'_, Self>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let state = slf.borrow().state.clone();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            use ormpi_core::backend::QueryBackend;
+            use ormpi_core::query::evaluate::evaluate_count;
+            use ormpi_core::registry::DatabaseRegistry;
+
+            let alias = state.database.clone().unwrap_or_else(|| "default".to_string());
+            let pool = {
+                let reg = DatabaseRegistry::global();
+                let guard = reg.read().unwrap();
+                guard
+                    .get_pool(&alias)
+                    .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?
+                    .clone()
+            };
+            let backend = QueryBackend(pool.backend());
+            let model_def = {
+                let reg = ModelRegistry::global();
+                let guard = reg.read().unwrap();
+                guard
+                    .get(&state.app_label, &state.model_name)
+                    .ok_or_else(|| {
+                        Python::with_gil(|_py| {
+                            pyo3::exceptions::PyRuntimeError::new_err("model not found")
+                        })
+                    })?
+                    .clone()
+            };
+            let count = evaluate_count(&state, &pool, &backend, &model_def)
+                .await
+                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+            Python::with_gil(|py| Ok(count.into_py(py)))
+        })
+        .map(|b| b.into())
+    }
+
+    /// Async — return True if any rows match this queryset.
+    fn exists(slf: Bound<'_, Self>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let mut state = slf.borrow().state.clone();
+        state.limit = Some(1);
+        state.order_by.clear();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let rows = fetch_rows_for_state(&state)
+                .await
+                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+            Python::with_gil(|py| Ok((!rows.is_empty()).into_py(py)))
+        })
+        .map(|b| b.into())
+    }
+
+    /// Async — return the first matching row, or None.
+    fn first(slf: Bound<'_, Self>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let mut state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+        state.limit = Some(1);
+        if state.order_by.is_empty() {
+            state.order_by = vec![OrderSpec {
+                field: "id".to_string(),
+                descending: false,
+                nulls_last: false,
+                nulls_first: false,
+            }];
+        }
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let rows = fetch_rows_for_state(&state)
+                .await
+                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+            Python::with_gil(|py| {
+                if rows.is_empty() {
+                    return Ok(py.None());
+                }
+                match &model_class {
+                    Some(cls) => row_to_instance(py, &rows[0], cls),
+                    None => Ok(py.None()),
+                }
+            })
+        })
+        .map(|b| b.into())
+    }
+
+    /// Async — return the last matching row, or None.
+    fn last(slf: Bound<'_, Self>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let mut state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+        state.limit = Some(1);
+        if state.order_by.is_empty() {
+            state.order_by = vec![OrderSpec {
+                field: "id".to_string(),
+                descending: true,
+                nulls_last: false,
+                nulls_first: false,
+            }];
+        } else {
+            // Reverse all orderings.
+            for o in &mut state.order_by {
+                o.descending = !o.descending;
+            }
+        }
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let rows = fetch_rows_for_state(&state)
+                .await
+                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+            Python::with_gil(|py| {
+                if rows.is_empty() {
+                    return Ok(py.None());
+                }
+                match &model_class {
+                    Some(cls) => row_to_instance(py, &rows[0], cls),
+                    None => Ok(py.None()),
+                }
+            })
+        })
+        .map(|b| b.into())
+    }
+
+    /// Async — return a single object matching the lookup; raise DoesNotExist or
+    /// MultipleObjectsReturned if the result count is != 1.
+    #[pyo3(signature = (*args, **kwargs))]
+    fn get(
+        slf: Bound<'_, Self>,
+        args: &Bound<'_, pyo3::types::PyTuple>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<PyObject> {
+        let py = slf.py();
+        // Apply filters from args/kwargs, then limit to 2 (to detect MultipleObjectsReturned).
+        let filtered_qs = slf.call_method("filter", args, kwargs)?;
+        let filtered_qs = filtered_qs.downcast::<PyQuerySet>()?;
+        let mut state = filtered_qs.borrow().state.clone();
+        let model_class = clone_model_class(py, &filtered_qs.borrow().model_class);
+        state.limit = Some(2);
+        state.order_by.clear();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let rows = fetch_rows_for_state(&state)
+                .await
+                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+            Python::with_gil(|py| match rows.len() {
+                0 => Err(pyo3::exceptions::PyException::new_err(format!(
+                    "{}.DoesNotExist: {} matching query does not exist.",
+                    state.model_name, state.model_name
+                ))),
+                1 => match &model_class {
+                    Some(cls) => row_to_instance(py, &rows[0], cls),
+                    None => Ok(py.None()),
+                },
+                n => Err(pyo3::exceptions::PyException::new_err(format!(
+                    "get() returned more than one {}: {} objects returned",
+                    state.model_name, n
+                ))),
+            })
+        })
+        .map(|b| b.into())
+    }
+
+    /// Async — INSERT a new row and return the model instance.
+    #[pyo3(signature = (**kwargs))]
+    fn create(slf: Bound<'_, Self>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+
+        let field_values: Vec<(String, ormpi_core::value::OrmpiValue)> = match kwargs {
+            Some(kw) => kw
+                .iter()
+                .map(|(k, v)| {
+                    let key: String = k.extract()?;
+                    let val = crate::model::instance::py_to_ormpi_value(&v)?;
+                    Ok((key, val))
+                })
+                .collect::<PyResult<Vec<_>>>()?,
+            None => vec![],
+        };
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            use ormpi_core::backend::QueryBackend;
+            use ormpi_core::model::registry::ModelRegistry;
+            use ormpi_core::query::evaluate::create_row;
+            use ormpi_core::registry::DatabaseRegistry;
+
+            let db_alias = state.database.clone().unwrap_or_else(|| "default".to_string());
+            let pool = {
+                let reg = DatabaseRegistry::global();
+                let guard = reg.read().unwrap();
+                guard
+                    .get_pool(&db_alias)
+                    .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?
+                    .clone()
+            };
+            let backend = QueryBackend(pool.backend());
+            let model_def = {
+                let reg = ModelRegistry::global();
+                let guard = reg.read().unwrap();
+                guard
+                    .get(&state.app_label, &state.model_name)
+                    .ok_or_else(|| {
+                        Python::with_gil(|_py| {
+                            pyo3::exceptions::PyRuntimeError::new_err("model not found")
+                        })
+                    })?
+                    .clone()
+            };
+
+            let pk_val = create_row(&field_values, &pool, &backend, &model_def)
+                .await
+                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+            // Re-fetch the created row by pk so the instance has all DB-generated values.
+            let mut fetch_state = state.clone();
+            fetch_state.filters = ormpi_core::query::state::ConditionTree::default();
+            fetch_state.filters.filters.push(ormpi_core::query::filter::FilterNode::Lookup {
+                field_path: vec![model_def.pk_field.clone()],
+                lookup: ormpi_core::query::filter::Lookup::Exact,
+                value: ormpi_core::value::OrmpiValue::Int(pk_val),
+            });
+            fetch_state.limit = Some(1);
+            fetch_state.order_by.clear();
+
+            let rows = fetch_rows_for_state(&fetch_state)
+                .await
+                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+            Python::with_gil(|py| {
+                if rows.is_empty() {
+                    return Ok(py.None());
+                }
+                match &model_class {
+                    Some(cls) => row_to_instance(py, &rows[0], cls),
+                    None => Ok(py.None()),
+                }
+            })
+        })
+        .map(|b| b.into())
+    }
+
+    /// Async bulk UPDATE — apply `kwargs` as SET columns to all rows matching the queryset.
+    /// Returns the number of rows affected.
+    #[pyo3(signature = (**kwargs))]
+    fn update(slf: Bound<'_, Self>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let state = slf.borrow().state.clone();
+
+        let updates: std::collections::HashMap<String, ormpi_core::value::OrmpiValue> =
+            match kwargs {
+                Some(kw) => kw
+                    .iter()
+                    .map(|(k, v)| {
+                        let key: String = k.extract()?;
+                        let val = crate::model::instance::py_to_ormpi_value(&v)?;
+                        Ok((key, val))
+                    })
+                    .collect::<PyResult<_>>()?,
+                None => std::collections::HashMap::new(),
+            };
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            use ormpi_core::backend::QueryBackend;
+            use ormpi_core::model::registry::ModelRegistry;
+            use ormpi_core::query::evaluate::bulk_update;
+            use ormpi_core::registry::DatabaseRegistry;
+
+            let alias = state.database.clone().unwrap_or_else(|| "default".to_string());
+            let pool = {
+                let reg = DatabaseRegistry::global();
+                let guard = reg.read().unwrap();
+                guard
+                    .get_pool(&alias)
+                    .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?
+                    .clone()
+            };
+            let backend = QueryBackend(pool.backend());
+            let model_def = {
+                let reg = ModelRegistry::global();
+                let guard = reg.read().unwrap();
+                guard
+                    .get(&state.app_label, &state.model_name)
+                    .ok_or_else(|| {
+                        Python::with_gil(|_py| {
+                            pyo3::exceptions::PyRuntimeError::new_err("model not found")
+                        })
+                    })?
+                    .clone()
+            };
+            let count = bulk_update(&state, &updates, &pool, &backend, &model_def)
+                .await
+                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+            Python::with_gil(|py| Ok::<PyObject, PyErr>(count.into_py(py)))
+        })
+        .map(|b| b.into())
+    }
+
+    /// Async bulk DELETE — delete all rows matching this queryset.
+    /// Returns `(count, {"ModelName": count})`.
+    fn delete(slf: Bound<'_, Self>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let state = slf.borrow().state.clone();
+        let model_name = state.model_name.clone();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            use ormpi_core::backend::QueryBackend;
+            use ormpi_core::model::registry::ModelRegistry;
+            use ormpi_core::query::evaluate::bulk_delete;
+            use ormpi_core::registry::DatabaseRegistry;
+
+            let alias = state.database.clone().unwrap_or_else(|| "default".to_string());
+            let pool = {
+                let reg = DatabaseRegistry::global();
+                let guard = reg.read().unwrap();
+                guard
+                    .get_pool(&alias)
+                    .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?
+                    .clone()
+            };
+            let backend = QueryBackend(pool.backend());
+            let model_def = {
+                let reg = ModelRegistry::global();
+                let guard = reg.read().unwrap();
+                guard
+                    .get(&state.app_label, &state.model_name)
+                    .ok_or_else(|| {
+                        Python::with_gil(|_py| {
+                            pyo3::exceptions::PyRuntimeError::new_err("model not found")
+                        })
+                    })?
+                    .clone()
+            };
+            let count = bulk_delete(&state, &pool, &backend, &model_def)
+                .await
+                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+            Python::with_gil(|py| {
+                let breakdown = PyDict::new_bound(py);
+                breakdown.set_item(&model_name, count)?;
+                let tuple = pyo3::types::PyTuple::new_bound(py, [count.into_py(py), breakdown.into()]);
+                Ok::<PyObject, PyErr>(tuple.into())
+            })
+        })
+        .map(|b| b.into())
+    }
+
+    /// Async — evaluate whole-queryset aggregates; returns a dict of `alias -> value`.
+    ///
+    /// Example:
+    ///   result = await Article.objects.aggregate(n=Count("id"), avg=Avg("views"))
+    #[pyo3(signature = (**kwargs))]
+    fn aggregate(
+        slf: Bound<'_, Self>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<PyObject> {
+        use crate::query::aggregate::extract_aggregate_expr;
+
+        let py = slf.py();
+        let mut state = slf.borrow().state.clone();
+
+        if let Some(kw) = kwargs {
+            for (k, v) in kw.iter() {
+                let alias: String = k.extract()?;
+                let expr = extract_aggregate_expr(&v)?;
+                state.annotations.insert(alias, expr);
+            }
+        }
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            use ormpi_core::backend::QueryBackend;
+            use ormpi_core::model::registry::ModelRegistry;
+            use ormpi_core::query::evaluate::evaluate_aggregate;
+            use ormpi_core::registry::DatabaseRegistry;
+
+            let alias = state.database.clone().unwrap_or_else(|| "default".to_string());
+            let pool = {
+                let reg = DatabaseRegistry::global();
+                let guard = reg.read().unwrap();
+                guard
+                    .get_pool(&alias)
+                    .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?
+                    .clone()
+            };
+            let backend = QueryBackend(pool.backend());
+            let model_def = {
+                let reg = ModelRegistry::global();
+                let guard = reg.read().unwrap();
+                guard
+                    .get(&state.app_label, &state.model_name)
+                    .ok_or_else(|| {
+                        Python::with_gil(|_py| {
+                            pyo3::exceptions::PyRuntimeError::new_err("model not found")
+                        })
+                    })?
+                    .clone()
+            };
+            let result = evaluate_aggregate(&state, &pool, &backend, &model_def)
+                .await
+                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+            Python::with_gil(|py| {
+                let dict = PyDict::new_bound(py);
+                for (k, v) in &result {
+                    dict.set_item(k, ormpi_value_to_py(py, v))?;
+                }
+                Ok::<PyObject, PyErr>(dict.into())
+            })
+        })
+        .map(|b| b.into())
+    }
+
+    /// Add per-row annotation(s) — returns a new QuerySet that includes the aggregate
+    /// expression(s) as extra columns in each result row.
+    ///
+    /// Example:
+    ///   Article.objects.annotate(comment_count=Count("comments"))
+    #[pyo3(signature = (**kwargs))]
+    fn annotate(
+        slf: Bound<'_, Self>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<PyObject> {
+        use crate::query::aggregate::extract_aggregate_expr;
+
+        let py = slf.py();
+        let mut state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+
+        if let Some(kw) = kwargs {
+            for (k, v) in kw.iter() {
+                let alias: String = k.extract()?;
+                let expr = extract_aggregate_expr(&v)?;
+                state.annotations.insert(alias, expr);
+            }
+        }
+
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
+    }
+
+    /// Async — get a single matching object, or create it with `create_defaults` if not found.
+    /// Returns `(instance, created: bool)`.
+    #[pyo3(signature = (defaults = None, **kwargs))]
+    fn get_or_create(
+        slf: Bound<'_, Self>,
+        defaults: Option<&Bound<'_, PyDict>>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<PyObject> {
+        let py = slf.py();
+
+        // lookup kwargs are used for both filter and create
+        let lookup_vals: Vec<(String, ormpi_core::value::OrmpiValue)> = match kwargs {
+            Some(kw) => kw
+                .iter()
+                .map(|(k, v)| {
+                    let key: String = k.extract()?;
+                    let val = crate::model::instance::py_to_ormpi_value(&v)?;
+                    Ok((key, val))
+                })
+                .collect::<PyResult<Vec<_>>>()?,
+            None => vec![],
+        };
+
+        let default_vals: Vec<(String, ormpi_core::value::OrmpiValue)> = match defaults {
+            Some(d) => d
+                .iter()
+                .map(|(k, v)| {
+                    let key: String = k.extract()?;
+                    let val = crate::model::instance::py_to_ormpi_value(&v)?;
+                    Ok((key, val))
+                })
+                .collect::<PyResult<Vec<_>>>()?,
+            None => vec![],
+        };
+
+        let state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            // Filter by lookup kwargs
+            let mut filter_state = state.clone();
+            {
+                use ormpi_core::model::registry::ModelRegistry;
+                use ormpi_core::query::filter::{FilterNode, Lookup};
+
+                let reg = ModelRegistry::global();
+                let guard = reg.read().unwrap();
+                let model_def = guard
+                    .get(&state.app_label, &state.model_name)
+                    .ok_or_else(|| {
+                        Python::with_gil(|_py| {
+                            pyo3::exceptions::PyRuntimeError::new_err("model not found")
+                        })
+                    })?
+                    .clone();
+
+                for (field_name, value) in &lookup_vals {
+                    let col = if let Some(f) = model_def.fields.get(field_name.as_str()) {
+                        f.attname.clone()
+                    } else {
+                        field_name.clone()
+                    };
+                    filter_state.filters.filters.push(FilterNode::Lookup {
+                        field_path: vec![col],
+                        lookup: Lookup::Exact,
+                        value: value.clone(),
+                    });
+                }
+            }
+            filter_state.limit = Some(1);
+
+            let rows = fetch_rows_for_state(&filter_state)
+                .await
+                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+            if !rows.is_empty() {
+                return Python::with_gil(|py| {
+                    let instance = match &model_class {
+                        Some(cls) => row_to_instance(py, &rows[0], cls)?,
+                        None => py.None(),
+                    };
+                    let tuple = pyo3::types::PyTuple::new_bound(py, [instance, false.into_py(py)]);
+                    Ok::<PyObject, PyErr>(tuple.into())
+                });
+            }
+
+            // Not found — build combined kwargs (lookup + defaults) and create.
+            let mut all_fields: Vec<(String, ormpi_core::value::OrmpiValue)> =
+                lookup_vals.into_iter().collect();
+            for (k, v) in &default_vals {
+                // defaults override lookup values
+                if !all_fields.iter().any(|(f, _)| f == k) {
+                    all_fields.push((k.clone(), v.clone()));
+                }
+            }
+
+            use ormpi_core::backend::QueryBackend;
+            use ormpi_core::model::registry::ModelRegistry;
+            use ormpi_core::query::evaluate::create_row;
+            use ormpi_core::registry::DatabaseRegistry;
+
+            let db_alias = state.database.clone().unwrap_or_else(|| "default".to_string());
+            let pool = {
+                let reg = DatabaseRegistry::global();
+                let guard = reg.read().unwrap();
+                guard
+                    .get_pool(&db_alias)
+                    .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?
+                    .clone()
+            };
+            let backend = QueryBackend(pool.backend());
+            let model_def = {
+                let reg = ModelRegistry::global();
+                let guard = reg.read().unwrap();
+                guard
+                    .get(&state.app_label, &state.model_name)
+                    .ok_or_else(|| {
+                        Python::with_gil(|_py| {
+                            pyo3::exceptions::PyRuntimeError::new_err("model not found")
+                        })
+                    })?
+                    .clone()
+            };
+
+            let pk_val = create_row(&all_fields, &pool, &backend, &model_def)
+                .await
+                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+            let mut fetch_state = state.clone();
+            fetch_state.filters = ormpi_core::query::state::ConditionTree::default();
+            fetch_state.filters.filters.push(ormpi_core::query::filter::FilterNode::Lookup {
+                field_path: vec![model_def.pk_field.clone()],
+                lookup: ormpi_core::query::filter::Lookup::Exact,
+                value: ormpi_core::value::OrmpiValue::Int(pk_val),
+            });
+            fetch_state.limit = Some(1);
+            fetch_state.order_by.clear();
+
+            let rows = fetch_rows_for_state(&fetch_state)
+                .await
+                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+            Python::with_gil(|py| {
+                let instance = if rows.is_empty() {
+                    py.None()
+                } else {
+                    match &model_class {
+                        Some(cls) => row_to_instance(py, &rows[0], cls)?,
+                        None => py.None(),
+                    }
+                };
+                let tuple = pyo3::types::PyTuple::new_bound(py, [instance, true.into_py(py)]);
+                Ok(tuple.into())
+            })
+        })
+        .map(|b| b.into())
+    }
+
+    /// Async — update matching rows with `defaults`, or create if none match.
+    /// Returns `(instance, created: bool)`.
+    #[pyo3(signature = (defaults = None, **kwargs))]
+    fn update_or_create(
+        slf: Bound<'_, Self>,
+        defaults: Option<&Bound<'_, PyDict>>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<PyObject> {
+        let py = slf.py();
+
+        let lookup_vals: Vec<(String, ormpi_core::value::OrmpiValue)> = match kwargs {
+            Some(kw) => kw
+                .iter()
+                .map(|(k, v)| {
+                    let key: String = k.extract()?;
+                    let val = crate::model::instance::py_to_ormpi_value(&v)?;
+                    Ok((key, val))
+                })
+                .collect::<PyResult<Vec<_>>>()?,
+            None => vec![],
+        };
+
+        let default_vals: Vec<(String, ormpi_core::value::OrmpiValue)> = match defaults {
+            Some(d) => d
+                .iter()
+                .map(|(k, v)| {
+                    let key: String = k.extract()?;
+                    let val = crate::model::instance::py_to_ormpi_value(&v)?;
+                    Ok((key, val))
+                })
+                .collect::<PyResult<Vec<_>>>()?,
+            None => vec![],
+        };
+
+        let state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            use ormpi_core::backend::QueryBackend;
+            use ormpi_core::model::registry::ModelRegistry;
+            use ormpi_core::query::evaluate::{bulk_update, create_row};
+            use ormpi_core::registry::DatabaseRegistry;
+
+            let db_alias = state.database.clone().unwrap_or_else(|| "default".to_string());
+            let pool = {
+                let reg = DatabaseRegistry::global();
+                let guard = reg.read().unwrap();
+                guard
+                    .get_pool(&db_alias)
+                    .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?
+                    .clone()
+            };
+            let backend = QueryBackend(pool.backend());
+            let model_def = {
+                let reg = ModelRegistry::global();
+                let guard = reg.read().unwrap();
+                guard
+                    .get(&state.app_label, &state.model_name)
+                    .ok_or_else(|| {
+                        Python::with_gil(|_py| {
+                            pyo3::exceptions::PyRuntimeError::new_err("model not found")
+                        })
+                    })?
+                    .clone()
+            };
+
+            // Apply lookup filters to find existing rows.
+            let mut filter_state = state.clone();
+            for (field_name, value) in &lookup_vals {
+                let col = if let Some(f) = model_def.fields.get(field_name.as_str()) {
+                    f.attname.clone()
+                } else {
+                    field_name.clone()
+                };
+                filter_state.filters.filters.push(
+                    ormpi_core::query::filter::FilterNode::Lookup {
+                        field_path: vec![col],
+                        lookup: ormpi_core::query::filter::Lookup::Exact,
+                        value: value.clone(),
+                    },
+                );
+            }
+
+            let updates: std::collections::HashMap<String, ormpi_core::value::OrmpiValue> =
+                default_vals.iter().cloned().collect();
+            let rows_affected = bulk_update(&filter_state, &updates, &pool, &backend, &model_def)
+                .await
+                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+            if rows_affected > 0 {
+                // Fetch updated instance.
+                let mut fetch_state = filter_state.clone();
+                fetch_state.limit = Some(1);
+                let rows = fetch_rows_for_state(&fetch_state)
+                    .await
+                    .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+                return Python::with_gil(|py| {
+                    let instance = if rows.is_empty() {
+                        py.None()
+                    } else {
+                        match &model_class {
+                            Some(cls) => row_to_instance(py, &rows[0], cls)?,
+                            None => py.None(),
+                        }
+                    };
+                    let tuple =
+                        pyo3::types::PyTuple::new_bound(py, [instance, false.into_py(py)]);
+                    Ok::<PyObject, PyErr>(tuple.into())
+                });
+            }
+
+            // No rows matched — create a new one.
+            let mut all_fields: Vec<(String, ormpi_core::value::OrmpiValue)> =
+                lookup_vals.into_iter().collect();
+            for (k, v) in &default_vals {
+                if !all_fields.iter().any(|(f, _)| f == k) {
+                    all_fields.push((k.clone(), v.clone()));
+                }
+            }
+
+            let pk_val = create_row(&all_fields, &pool, &backend, &model_def)
+                .await
+                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+            let mut fetch_state2 = state.clone();
+            fetch_state2.filters = ormpi_core::query::state::ConditionTree::default();
+            fetch_state2.filters.filters.push(ormpi_core::query::filter::FilterNode::Lookup {
+                field_path: vec![model_def.pk_field.clone()],
+                lookup: ormpi_core::query::filter::Lookup::Exact,
+                value: ormpi_core::value::OrmpiValue::Int(pk_val),
+            });
+            fetch_state2.limit = Some(1);
+            fetch_state2.order_by.clear();
+
+            let rows = fetch_rows_for_state(&fetch_state2)
+                .await
+                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+            Python::with_gil(|py| {
+                let instance = if rows.is_empty() {
+                    py.None()
+                } else {
+                    match &model_class {
+                        Some(cls) => row_to_instance(py, &rows[0], cls)?,
+                        None => py.None(),
+                    }
+                };
+                let tuple = pyo3::types::PyTuple::new_bound(py, [instance, true.into_py(py)]);
+                Ok(tuple.into())
+            })
+        })
+        .map(|b| b.into())
+    }
+
+    /// Set FK paths to JOIN in a single query.
+    #[pyo3(signature = (*fields))]
+    fn select_related(slf: Bound<'_, Self>, fields: Vec<String>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let mut state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+        state.select_related_fields = fields;
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
+    }
+
+    /// Set reverse-FK / M2M paths to batch-fetch after the main query.
+    #[pyo3(signature = (*fields))]
+    fn prefetch_related(slf: Bound<'_, Self>, fields: Vec<String>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let mut state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+        state.prefetch_fields = fields;
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
+    }
+
+    /// Async — INSERT a list of model instances in batches.
+    /// Returns the number of rows created.
+    #[pyo3(signature = (objs, batch_size = None))]
+    fn bulk_create(
+        slf: Bound<'_, Self>,
+        objs: Vec<PyObject>,
+        batch_size: Option<usize>,
+    ) -> PyResult<PyObject> {
+        let py = slf.py();
+        let state = slf.borrow().state.clone();
+
+        // Extract _ormpi_values from each object (must happen while we hold the GIL).
+        let rows: Vec<Vec<(String, ormpi_core::value::OrmpiValue)>> = objs
+            .iter()
+            .map(|obj| {
+                let bound = obj.bind(py);
+                let values = bound.getattr("_ormpi_values")?;
+                let d = values.downcast::<PyDict>().map_err(|_| {
+                    pyo3::exceptions::PyTypeError::new_err(
+                        "bulk_create: each object must have _ormpi_values dict",
+                    )
+                })?;
+                d.iter()
+                    .map(|(k, v)| {
+                        let key: String = k.extract()?;
+                        let val = crate::model::instance::py_to_ormpi_value(&v)?;
+                        Ok((key, val))
+                    })
+                    .collect::<PyResult<Vec<_>>>()
+            })
+            .collect::<PyResult<_>>()?;
+
+        let chunk = batch_size.unwrap_or(1000);
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            use ormpi_core::backend::QueryBackend;
+            use ormpi_core::model::registry::ModelRegistry;
+            use ormpi_core::query::evaluate::bulk_create_rows;
+            use ormpi_core::registry::DatabaseRegistry;
+
+            let db_alias = state.database.clone().unwrap_or_else(|| "default".to_string());
+            let pool = {
+                let reg = DatabaseRegistry::global();
+                let guard = reg.read().unwrap();
+                guard
+                    .get_pool(&db_alias)
+                    .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?
+                    .clone()
+            };
+            let backend = QueryBackend(pool.backend());
+            let model_def = {
+                let reg = ModelRegistry::global();
+                let guard = reg.read().unwrap();
+                guard
+                    .get(&state.app_label, &state.model_name)
+                    .ok_or_else(|| {
+                        Python::with_gil(|_py| {
+                            pyo3::exceptions::PyRuntimeError::new_err("model not found")
+                        })
+                    })?
+                    .clone()
+            };
+
+            let count = bulk_create_rows(rows, chunk, &pool, &backend, &model_def)
+                .await
+                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+            Python::with_gil(|py| Ok::<PyObject, PyErr>(count.into_py(py)))
+        })
+        .map(|b| b.into())
+    }
+
+    /// Async — UPDATE only the given `fields` on each object in `objs` (matched by pk).
+    /// Returns the number of rows updated.
+    #[pyo3(signature = (objs, fields, batch_size = None))]
+    fn bulk_update(
+        slf: Bound<'_, Self>,
+        objs: Vec<PyObject>,
+        fields: Vec<String>,
+        batch_size: Option<usize>,
+    ) -> PyResult<PyObject> {
+        let py = slf.py();
+        let state = slf.borrow().state.clone();
+
+        // Extract pk + field values while holding the GIL.
+        // Each element: (pk_value, [(field, value), ...])
+        let updates: Vec<(ormpi_core::value::OrmpiValue, Vec<(String, ormpi_core::value::OrmpiValue)>)> = objs
+            .iter()
+            .map(|obj| {
+                let bound = obj.bind(py);
+                let values_obj = bound.getattr("_ormpi_values")?;
+                let d = values_obj.downcast::<PyDict>().map_err(|_| {
+                    pyo3::exceptions::PyTypeError::new_err(
+                        "bulk_update: each object must have _ormpi_values dict",
+                    )
+                })?;
+
+                let pk_py = d.get_item("id")?.ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err(
+                        "bulk_update: object has no 'id' in _ormpi_values",
+                    )
+                })?;
+                let pk_val = crate::model::instance::py_to_ormpi_value(&pk_py)?;
+
+                let field_vals: Vec<(String, ormpi_core::value::OrmpiValue)> = fields
+                    .iter()
+                    .filter_map(|f| {
+                        d.get_item(f.as_str()).ok().flatten().map(|v| {
+                            crate::model::instance::py_to_ormpi_value(&v)
+                                .map(|val| (f.clone(), val))
+                        })
+                    })
+                    .collect::<PyResult<_>>()?;
+
+                Ok((pk_val, field_vals))
+            })
+            .collect::<PyResult<_>>()?;
+
+        let _chunk = batch_size.unwrap_or(1000);
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            use ormpi_core::backend::QueryBackend;
+            use ormpi_core::model::registry::ModelRegistry;
+            use ormpi_core::query::evaluate::update_row_by_pk;
+            use ormpi_core::registry::DatabaseRegistry;
+
+            let db_alias = state.database.clone().unwrap_or_else(|| "default".to_string());
+            let pool = {
+                let reg = DatabaseRegistry::global();
+                let guard = reg.read().unwrap();
+                guard
+                    .get_pool(&db_alias)
+                    .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?
+                    .clone()
+            };
+            let backend = QueryBackend(pool.backend());
+            let model_def = {
+                let reg = ModelRegistry::global();
+                let guard = reg.read().unwrap();
+                guard
+                    .get(&state.app_label, &state.model_name)
+                    .ok_or_else(|| {
+                        Python::with_gil(|_py| {
+                            pyo3::exceptions::PyRuntimeError::new_err("model not found")
+                        })
+                    })?
+                    .clone()
+            };
+
+            let mut total = 0u64;
+            for (pk_val, field_vals) in &updates {
+                let affected =
+                    update_row_by_pk(pk_val, field_vals, &pool, &backend, &model_def)
+                        .await
+                        .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+                total += affected;
+            }
+
+            Python::with_gil(|py| Ok::<PyObject, PyErr>(total.into_py(py)))
+        })
+        .map(|b| b.into())
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "<QuerySet [{}.{}]>",
+            self.state.app_label, self.state.model_name
+        )
+    }
+}
+
+fn parse_order_spec(s: &str) -> OrderSpec {
+    let descending = s.starts_with('-');
+    let field = s.trim_start_matches('-').to_string();
+    OrderSpec {
+        field,
+        descending,
+        nulls_last: false,
+        nulls_first: false,
+    }
+}

@@ -1,0 +1,79 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "ormpi"
+version = "0.1.0"
+description = "A Django-like async ORM for Python, built on Rust (sea-query + sqlx)"
+readme = "README.md"
+license = { text = "MIT OR Apache-2.0" }
+requires-python = ">=3.12"
+keywords = ["orm", "database", "async", "sqlite", "postgres", "mysql", "rust"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Database",
+    "Framework :: AsyncIO",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+]
+
+[project.scripts]
+ormpi = "ormpi._cli:main"
+
+# ── Dependency groups (uv / PEP 735) ─────────────────────────────────────────
+# Install with: uv sync --all-groups
+# Or selectively: uv sync --group dev --group test
+
+[dependency-groups]
+dev = [
+    "maturin>=1.7,<2.0",
+    "mypy>=1.10",
+    "pyright>=1.1",
+    "ruff>=0.4",
+]
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "anyio[trio]",
+]
+
+# ── uv configuration ──────────────────────────────────────────────────────────
+
+[tool.uv]
+# Invalidate the uv cache when Cargo.lock changes so the extension is rebuilt.
+cache-keys = [{ git = true }, { file = "Cargo.lock" }]
+
+# ── maturin configuration ─────────────────────────────────────────────────────
+
+[tool.maturin]
+manifest-path = "ormpi-py/Cargo.toml"
+python-source = "python"
+features = ["pyo3/extension-module"]
+module-name = "ormpi._core"
+
+# ── pytest ────────────────────────────────────────────────────────────────────
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+# ── ruff ─────────────────────────────────────────────────────────────────────
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["ormpi"]
+
+# ── mypy ─────────────────────────────────────────────────────────────────────
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
