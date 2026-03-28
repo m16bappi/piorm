@@ -1152,6 +1152,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "ormpi-core",
+ "sqlx",
  "tokio",
 ]
 
@@ -1184,6 +1185,7 @@ dependencies = [
  "futures",
  "indexmap",
  "once_cell",
+ "ormpi-cli",
  "ormpi-core",
  "pyo3",
  "pyo3-async-runtimes",

@@ -9,6 +9,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 ormpi-core = { path = "../ormpi-core" }
+ormpi-cli = { path = "../ormpi-cli" }
 indexmap = "2"
 pyo3 = { version = "0.22", features = ["extension-module", "abi3-py312", "multiple-pymethods"] }
 pyo3-async-runtimes.workspace = true

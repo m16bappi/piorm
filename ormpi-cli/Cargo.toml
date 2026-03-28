@@ -7,7 +7,12 @@ edition = "2021"
 name = "ormpi"
 path = "src/main.rs"
 
+[lib]
+name = "ormpi_cli"
+path = "src/lib.rs"
+
 [dependencies]
 ormpi-core = { path = "../ormpi-core" }
 clap.workspace = true
 tokio.workspace = true
+sqlx.workspace = true

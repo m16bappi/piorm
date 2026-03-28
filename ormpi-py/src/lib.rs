@@ -241,9 +241,30 @@ fn execute_raw(py: Python<'_>, sql: String, alias: &str) -> PyResult<PyObject> {
     pyo3_async_runtimes::tokio::future_into_py(py, future).map(|b| b.into())
 }
 
+/// run_cli(args) -> int
+///
+/// Run the ormpi CLI with the given argument list (excluding the program name).
+/// Returns the exit code. Raises RuntimeError on failure.
+///
+/// Example:
+///   from ormpi._core import run_cli
+///   run_cli(["migrate", "--database-url", "sqlite://./db.sqlite3"])
 #[pyfunction]
-fn run_cli(_args: Vec<String>) -> PyResult<i32> {
-    Ok(0)
+fn run_cli(args: Vec<String>) -> PyResult<i32> {
+    use clap::Parser;
+
+    // Prepend a fake program name so clap can parse the args list correctly.
+    let mut argv = vec!["ormpi".to_string()];
+    argv.extend(args);
+
+    let cli = ormpi_cli::Cli::try_parse_from(&argv)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+    rt.block_on(ormpi_cli::run_cli(cli))
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
 }
 
 /// create_table(model_key, alias="default") -> Awaitable[None]
