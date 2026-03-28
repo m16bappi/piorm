@@ -394,7 +394,7 @@ pub fn _register_model_class(cls: Bound<'_, PyType>) -> PyResult<()> {
         model_name: class_name.clone(),
         table_name,
         fields,
-        pk_field: pk_field_name,
+        pk_field: pk_field_name.clone(),
         ordering,
         unique_together: vec![],
         index_together: vec![],
@@ -408,6 +408,9 @@ pub fn _register_model_class(cls: Bound<'_, PyType>) -> PyResult<()> {
     };
 
     ModelRegistry::global().write().unwrap().register(model_def);
+
+    // ── Expose pk field name so Python's `pk` property can be dynamic ─────
+    cls.setattr("_ormpi_pk_field", pk_field_name.as_str())?;
 
     // ── Attach `objects` manager ──────────────────────────────────────────
 

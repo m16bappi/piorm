@@ -64,11 +64,13 @@ class Model(_BaseModel):
 
     @property
     def pk(self) -> Any:
-        """Return the primary-key value (always stored under 'id' by default)."""
-        return self._ormpi_values.get("id")
+        """Return the primary-key value for whatever field has primary_key=True."""
+        pk_field = getattr(self.__class__, "_ormpi_pk_field", "id")
+        return self._ormpi_values.get(pk_field)
 
     def __repr__(self) -> str:
-        pk = self._ormpi_values.get("id", "?")
+        pk_field = getattr(self.__class__, "_ormpi_pk_field", "id")
+        pk = self._ormpi_values.get(pk_field, "?")
         return f"<{self.__class__.__name__}: pk={pk}>"
 
     class Meta:

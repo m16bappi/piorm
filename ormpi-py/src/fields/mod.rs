@@ -82,7 +82,7 @@ macro_rules! impl_field_common {
             }
 
             /// Descriptor `__set__`: write value into `_ormpi_values` and record
-            /// the field name in `_ormpi_dirty`.
+            /// the field name in `_ormpi_dirty` (only for DB-fetched instances).
             fn __set__(
                 &self,
                 instance: pyo3::Bound<'_, pyo3::PyAny>,
@@ -92,9 +92,20 @@ macro_rules! impl_field_common {
                 if let Ok(dict) = values.downcast_into::<pyo3::types::PyDict>() {
                     dict.set_item(self.inner.name.as_str(), &value)?;
                 }
-                instance
-                    .getattr("_ormpi_dirty")?
-                    .call_method1("add", (self.inner.name.as_str(),))?;
+                // Only track dirty when loaded from DB (adding=False).
+                // For new (adding=True) instances, save() does a full INSERT anyway.
+                let is_adding: bool = instance
+                    .getattr("_ormpi_state")
+                    .ok()
+                    .and_then(|s| s.downcast_into::<pyo3::types::PyDict>().ok())
+                    .and_then(|d| d.get_item("adding").ok().flatten())
+                    .and_then(|v| v.extract::<bool>().ok())
+                    .unwrap_or(true);
+                if !is_adding {
+                    instance
+                        .getattr("_ormpi_dirty")?
+                        .call_method1("add", (self.inner.name.as_str(),))?;
+                }
                 Ok(())
             }
 
