@@ -1153,6 +1153,7 @@ name = "ormpi-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "futures",
  "indexmap",
  "once_cell",
  "rust_decimal",
@@ -1171,6 +1172,7 @@ name = "ormpi-py"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "futures",
  "indexmap",
  "once_cell",
  "ormpi-core",

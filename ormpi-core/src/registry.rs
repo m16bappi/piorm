@@ -39,20 +39,19 @@ impl DatabaseRegistry {
     }
 }
 
-/// Initialize all database connections from a list of configs, replacing any previous registry.
+/// Initialize all database connections from a list of configs concurrently.
 pub async fn initialize(configs: Vec<DatabaseConfig>) -> crate::Result<()> {
-    let mut pools = HashMap::new();
-    let mut cfgs = HashMap::new();
-
-    for config in configs {
-        let pool = OrmpiPool::connect(&config).await?;
-        pools.insert(config.alias.clone(), pool);
-        cfgs.insert(config.alias.clone(), config);
-    }
+    // Connect all pools concurrently.
+    let pool_futs: Vec<_> = configs.iter().map(|c| OrmpiPool::connect(c)).collect();
+    let pools_vec = futures::future::try_join_all(pool_futs).await?;
 
     let global = DatabaseRegistry::global();
     let mut guard = global.write().unwrap();
-    guard.pools = pools;
-    guard.configs = cfgs;
+    guard.pools.clear();
+    guard.configs.clear();
+    for (config, pool) in configs.into_iter().zip(pools_vec) {
+        guard.pools.insert(config.alias.clone(), pool);
+        guard.configs.insert(config.alias.clone(), config);
+    }
     Ok(())
 }

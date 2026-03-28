@@ -1,7 +1,12 @@
-"""Database utilities — DDL helpers for creating model tables."""
+"""Database utilities — DDL helpers, connection proxy."""
 
+from ormpi._core import ConnectionProxy as _ConnectionProxy
 from ormpi._core import create_all_tables as _create_all_tables
 from ormpi._core import create_table as _create_table
+
+#: Proxy that allows dict-style access to database wrappers by alias.
+#: Example: ``ormpi.db.connections["default"].vendor``
+connections = _ConnectionProxy()
 
 
 async def create_table(model_name: str, alias: str = "default") -> None:

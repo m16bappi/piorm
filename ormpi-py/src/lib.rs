@@ -1,4 +1,5 @@
 pub(crate) mod convert;
+pub mod db;
 pub mod fields;
 pub mod model;
 pub mod query;
@@ -83,10 +84,34 @@ fn get_version() -> &'static str {
 #[pyfunction]
 fn configure(py: Python<'_>, databases: &Bound<'_, PyDict>) -> PyResult<PyObject> {
     let configs = parse_databases_dict(py, databases)?;
+
+    // Validate that a "default" alias is present.
+    if !configs.iter().any(|c| c.alias == "default") {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "DATABASES must contain a 'default' entry",
+        ));
+    }
+
     let future = async move {
         ormpi_core::registry::initialize(configs)
             .await
             .map_err(ormpi_err)
+    };
+    pyo3_async_runtimes::tokio::future_into_py(py, future).map(|b| b.into())
+}
+
+/// close() -> Awaitable[None]  — gracefully close all database pools
+#[pyfunction]
+fn close(py: Python<'_>) -> PyResult<PyObject> {
+    let future = async move {
+        let pools: Vec<_> = {
+            let registry = ormpi_core::registry::DatabaseRegistry::global();
+            let guard = registry.read().unwrap();
+            guard.pools.values().cloned().collect()
+        };
+        let close_futs: Vec<_> = pools.iter().map(|p| p.close()).collect();
+        futures::future::join_all(close_futs).await;
+        Python::with_gil(|py| Ok(py.None()))
     };
     pyo3_async_runtimes::tokio::future_into_py(py, future).map(|b| b.into())
 }
@@ -267,6 +292,7 @@ fn create_all_tables(py: Python<'_>, alias: &str) -> PyResult<PyObject> {
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_version, m)?)?;
     m.add_function(wrap_pyfunction!(configure, m)?)?;
+    m.add_function(wrap_pyfunction!(close, m)?)?;
     m.add_function(wrap_pyfunction!(execute_raw, m)?)?;
     m.add_function(wrap_pyfunction!(execute_sql, m)?)?;
     m.add_function(wrap_pyfunction!(create_table, m)?)?;
@@ -275,6 +301,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     fields::register_fields(m)?;
     model::register_model(m)?;
     query::register_query(m)?;
+    db::register_db(m)?;
     Ok(())
 }
 
