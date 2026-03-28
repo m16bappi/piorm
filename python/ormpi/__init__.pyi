@@ -11,6 +11,7 @@ from ormpi._core import execute_raw as execute_raw
 from ormpi.db import configure as configure, close as close
 from ormpi.models import Model as Model
 from ormpi._core import QuerySet as QuerySet, Manager as Manager
+from ormpi.fields import Field as Field
 
 # Sub-module references
 import ormpi.fields as fields

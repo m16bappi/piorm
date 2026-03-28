@@ -25,6 +25,10 @@ from ormpi.db import configure
 # ── Model ─────────────────────────────────────────────────────────────────
 from ormpi.models import Model
 
+# ── Public typing helpers ──────────────────────────────────────────────────
+from ormpi._core import Manager, QuerySet
+from ormpi.fields import Field
+
 __version__: str = get_version()
 
 __all__ = [
@@ -35,6 +39,10 @@ __all__ = [
     "__version__",
     # model
     "Model",
+    # typing helpers
+    "Manager",
+    "QuerySet",
+    "Field",
     # sub-modules
     "fields",
     "expr",
