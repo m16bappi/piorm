@@ -1,18 +1,21 @@
 """Per-asyncio-task active transaction registry."""
+from __future__ import annotations
+
 import asyncio
+from typing import Any
 
 # Maps task id → {alias: Transaction}
-_CURRENT: dict = {}
+_CURRENT: dict[int, dict[str, Any]] = {}
 
 
-def _get_current_transaction(using: str):
+def _get_current_transaction(using: str) -> Any:
     task = asyncio.current_task()
     if task is None:
         return None
     return _CURRENT.get(id(task), {}).get(using)
 
 
-def _set_current_transaction(using: str, txn) -> None:
+def _set_current_transaction(using: str, txn: Any) -> None:
     task = asyncio.current_task()
     if task is None:
         return

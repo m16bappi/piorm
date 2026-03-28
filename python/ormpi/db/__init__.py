@@ -1,5 +1,7 @@
 """Database utilities — DDL helpers, connection proxy."""
 
+__all__ = ["connections", "create_table", "create_all_tables"]
+
 from ormpi._core import ConnectionProxy as _ConnectionProxy
 from ormpi._core import create_all_tables as _create_all_tables
 from ormpi._core import create_table as _create_table

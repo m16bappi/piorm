@@ -5,6 +5,8 @@ Subclass `DatabaseRouter` and return a database alias from `db_for_read` /
 `db_for_write` to direct queries.  Return ``None`` to defer to the next router.
 """
 
+__all__ = ["DatabaseRouter"]
+
 
 class DatabaseRouter:
     """Abstract base class for database routers.

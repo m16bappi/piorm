@@ -1,0 +1,6 @@
+{
+  "pythonVersion": "3.12",
+  "include": ["python"],
+  "reportMissingModuleSource": "none",
+  "reportAssignmentType": "none"
+}

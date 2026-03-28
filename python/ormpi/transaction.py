@@ -1,6 +1,13 @@
 """
 Async transaction utilities: `atomic()` context manager.
 """
+from __future__ import annotations
+
+__all__ = ["atomic"]
+
+from typing import Any
+
+from ormpi._core import Transaction
 from ormpi._core import begin as _begin
 from ormpi._core import create_savepoint as _create_savepoint
 from ormpi._core import release_savepoint as _release_savepoint
@@ -34,11 +41,11 @@ class atomic:
 
     def __init__(self, using: str = "default") -> None:
         self._using = using
-        self._txn = None
+        self._txn: Transaction | None = None
         self._savepoint_name: str | None = None
         self._is_nested = False
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> Transaction:
         current = _get_current_transaction(self._using)
         if current is not None and current.is_open:
             # Nested: use a savepoint instead of BEGIN
@@ -50,12 +57,20 @@ class atomic:
             self._is_nested = False
             self._txn = await _begin(using=self._using)
             _set_current_transaction(self._using, self._txn)
+        assert self._txn is not None
         return self._txn
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> bool:
+        assert self._txn is not None
         if exc_type is None:
             # Success path
             if self._is_nested:
+                assert self._savepoint_name is not None
                 await _release_savepoint(self._txn, self._savepoint_name)
             else:
                 await self._txn.commit()
@@ -63,6 +78,7 @@ class atomic:
         else:
             # Exception path — rollback
             if self._is_nested:
+                assert self._savepoint_name is not None
                 await _rollback_to_savepoint(self._txn, self._savepoint_name)
             else:
                 await self._txn.rollback()

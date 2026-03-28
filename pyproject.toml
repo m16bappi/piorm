@@ -77,3 +77,9 @@ known-first-party = ["ormpi"]
 [tool.mypy]
 strict = true
 python_version = "3.12"
+
+# ── pyright ───────────────────────────────────────────────────────────────────
+
+[tool.pyright]
+pythonVersion = "3.12"
+include = ["python"]

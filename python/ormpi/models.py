@@ -9,6 +9,8 @@ Registration into the global `ModelRegistry` is done by the Rust function
 
 from __future__ import annotations
 
+__all__ = ["Model"]
+
 from typing import Any
 
 from ormpi._core import Model as _BaseModel
