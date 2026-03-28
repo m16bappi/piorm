@@ -54,7 +54,7 @@ pub(crate) async fn fetch_rows_for_state(state: &QueryState) -> ormpi_core::Resu
     use ormpi_core::query::evaluate::evaluate;
     use ormpi_core::registry::DatabaseRegistry;
 
-    let alias = state.database.clone().unwrap_or_else(|| "default".to_string());
+    let alias = crate::routing::get_read_alias(&state.model_name, state.database.as_deref());
     let pool = {
         let reg = DatabaseRegistry::global();
         let guard = reg.read().unwrap();
@@ -244,7 +244,7 @@ async fn fetch_prefetch_data(
 
     let mut result = vec![];
 
-    let db_alias = state.database.clone().unwrap_or_else(|| "default".to_string());
+    let db_alias = crate::routing::get_read_alias(&state.model_name, state.database.as_deref());
     let pool = {
         let reg = DatabaseRegistry::global();
         let guard = reg.read().unwrap();

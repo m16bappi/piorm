@@ -3,6 +3,7 @@ pub mod db;
 pub mod fields;
 pub mod model;
 pub mod query;
+pub mod routing;
 mod runtime;
 
 use std::collections::HashMap;
@@ -80,9 +81,14 @@ fn get_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-/// configure(databases: dict) -> Awaitable[None]
+/// configure(databases: dict, database_routers=None) -> Awaitable[None]
 #[pyfunction]
-fn configure(py: Python<'_>, databases: &Bound<'_, PyDict>) -> PyResult<PyObject> {
+#[pyo3(signature = (databases, database_routers = None))]
+fn configure(
+    py: Python<'_>,
+    databases: &Bound<'_, PyDict>,
+    database_routers: Option<Vec<String>>,
+) -> PyResult<PyObject> {
     let configs = parse_databases_dict(py, databases)?;
 
     // Validate that a "default" alias is present.
@@ -91,6 +97,13 @@ fn configure(py: Python<'_>, databases: &Bound<'_, PyDict>) -> PyResult<PyObject
             "DATABASES must contain a 'default' entry",
         ));
     }
+
+    // Load router instances while we still hold the GIL.
+    let router_instances = match database_routers.as_deref() {
+        Some(paths) if !paths.is_empty() => routing::load_routers(py, paths)?,
+        _ => vec![],
+    };
+    routing::set_routers(router_instances);
 
     let future = async move {
         ormpi_core::registry::initialize(configs)

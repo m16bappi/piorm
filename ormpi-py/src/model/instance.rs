@@ -90,8 +90,6 @@ pub fn save(
     update_fields: Option<Vec<String>>,
 ) -> PyResult<PyObject> {
     let py = slf.py();
-    let using = using.unwrap_or_else(|| "default".to_string());
-
     // Extract everything we need before entering the async block.
     let values = extract_values(&slf)?;
     let dirty = extract_dirty(&slf)?;
@@ -104,6 +102,10 @@ pub fn save(
             class_name
         ))
     })?;
+
+    // Resolve the write alias via the router chain (explicit `using` always wins).
+    let using =
+        crate::routing::get_write_alias(&model_def.model_name, using.as_deref());
 
     // Get the pool before entering the async block (avoids non-Send guard).
     let pool = {
@@ -158,7 +160,6 @@ pub fn save(
 /// Returns `(rows_deleted, {"ModelName": rows_deleted})`.
 pub fn delete(slf: Bound<'_, PyAny>, using: Option<String>) -> PyResult<PyObject> {
     let py = slf.py();
-    let using = using.unwrap_or_else(|| "default".to_string());
 
     let class_name = class_name_of(&slf)?;
     let model_def = get_model_def_by_name(&class_name).ok_or_else(|| {
@@ -167,6 +168,8 @@ pub fn delete(slf: Bound<'_, PyAny>, using: Option<String>) -> PyResult<PyObject
             class_name
         ))
     })?;
+
+    let using = crate::routing::get_write_alias(&model_def.model_name, using.as_deref());
 
     let values = extract_values(&slf)?;
     let pk_val = values
