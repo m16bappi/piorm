@@ -5,22 +5,44 @@ build-backend = "maturin"
 [project]
 name = "ormpi"
 version = "0.1.0"
-description = "A Django-like async ORM for Python, built on Rust (sea-query + sqlx)"
+description = "A Django-like async ORM for Python, built on Rust with sea-query + sqlx"
 readme = "README.md"
 license = { text = "MIT OR Apache-2.0" }
-requires-python = ">=3.12"
-keywords = ["orm", "database", "async", "sqlite", "postgres", "mysql", "rust"]
+requires-python = ">=3.9"
+keywords = ["orm", "database", "async", "sqlite", "postgres", "mysql", "rust", "django"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
     "Framework :: AsyncIO",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Rust",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
 ]
 
 [project.scripts]
 ormpi = "ormpi._cli:main"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "anyio[trio]>=4.0",
+    "pytest-benchmark>=4.0",
+]
+dev = [
+    "mypy>=1.10",
+    "pyright>=1.1",
+    "ruff>=0.4",
+    "maturin>=1.7",
+]
 
 # ── Dependency groups (uv / PEP 735) ─────────────────────────────────────────
 # Install with: uv sync --all-groups
@@ -37,6 +59,7 @@ test = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "anyio[trio]",
+    "pytest-benchmark>=5.2.3",
 ]
 
 # ── uv configuration ──────────────────────────────────────────────────────────
@@ -58,6 +81,7 @@ module-name = "ormpi._core"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "--tb=short"
 
 # ── ruff ─────────────────────────────────────────────────────────────────────
 
@@ -77,6 +101,7 @@ known-first-party = ["ormpi"]
 [tool.mypy]
 strict = true
 python_version = "3.12"
+packages = ["ormpi"]
 
 # ── pyright ───────────────────────────────────────────────────────────────────
 
