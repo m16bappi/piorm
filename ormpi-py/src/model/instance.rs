@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::types::{PyDict, PyList, PyTuple};
 
 use ormpi_core::model::registry::ModelRegistry;
 use ormpi_core::value::OrmpiValue;
@@ -34,6 +34,20 @@ pub(crate) fn py_to_ormpi_value(obj: &Bound<'_, PyAny>) -> PyResult<OrmpiValue> 
     }
     if let Ok(s) = obj.extract::<String>() {
         return Ok(OrmpiValue::Text(s));
+    }
+    if let Ok(list) = obj.downcast::<PyList>() {
+        let items = list
+            .iter()
+            .map(|item| py_to_ormpi_value(&item))
+            .collect::<PyResult<Vec<_>>>()?;
+        return Ok(OrmpiValue::List(items));
+    }
+    if let Ok(tup) = obj.downcast::<PyTuple>() {
+        let items = tup
+            .iter()
+            .map(|item| py_to_ormpi_value(&item))
+            .collect::<PyResult<Vec<_>>>()?;
+        return Ok(OrmpiValue::List(items));
     }
     if let Ok(b) = obj.extract::<Vec<u8>>() {
         return Ok(OrmpiValue::Bytes(b));

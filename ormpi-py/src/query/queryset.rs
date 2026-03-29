@@ -126,6 +126,10 @@ pub(crate) fn ormpi_value_to_py(py: Python<'_>, value: &OrmpiValue) -> PyObject 
         OrmpiValue::Time(t) => t.to_string().into_py(py),
         OrmpiValue::DateTime(dt) => dt.to_string().into_py(py),
         OrmpiValue::DateTimeTz(dt) => dt.to_string().into_py(py),
+        OrmpiValue::List(items) => {
+            let py_list: Vec<PyObject> = items.iter().map(|v| ormpi_value_to_py(py, v)).collect();
+            py_list.into_py(py)
+        }
     }
 }
 

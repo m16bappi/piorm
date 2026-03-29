@@ -613,10 +613,22 @@ fn lookup_to_expr(col: Alias, lookup: &Lookup, value: &OrmpiValue) -> sea_query:
                 Expr::col(col).is_not_null()
             }
         }
-        Lookup::In => {
-            // TODO: handle list values — for now treat single value as eq
-            Expr::col(col).eq(sea_val)
-        }
+        Lookup::In => match value {
+            OrmpiValue::List(items) => {
+                let sea_vals: Vec<sea_query::Value> =
+                    items.iter().map(|v| v.to_sea_value()).collect();
+                Expr::col(col).is_in(sea_vals)
+            }
+            single => Expr::col(col).eq(single.to_sea_value()),
+        },
+        Lookup::Range => match value {
+            OrmpiValue::List(bounds) if bounds.len() == 2 => {
+                let lo = bounds[0].to_sea_value();
+                let hi = bounds[1].to_sea_value();
+                Expr::col(col.clone()).gte(lo).and(Expr::col(col).lte(hi))
+            }
+            _ => Expr::col(col).eq(sea_val),
+        },
         _ => Expr::col(col).eq(sea_val),
     }
 }

@@ -20,6 +20,7 @@ pub enum OrmpiValue {
     Uuid(Uuid),
     Json(JsonValue),
     Decimal(Decimal),
+    List(Vec<OrmpiValue>),
 }
 
 impl OrmpiValue {
@@ -43,6 +44,7 @@ impl OrmpiValue {
             OrmpiValue::Decimal(d) => sea_query::Value::Double(Some(
                 d.to_f64().unwrap_or(f64::NAN),
             )),
+            OrmpiValue::List(_) => sea_query::Value::Bytes(None), // handled specially in lookup_to_expr
         }
     }
 }
