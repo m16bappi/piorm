@@ -83,26 +83,22 @@ class QuerySet[M]:
     """Lazy, chainable async query builder.
 
     Queries are not executed until the queryset is awaited or async-iterated.
-    Awaiting a ``QuerySet`` fetches all rows and returns the **same**
-    ``QuerySet`` instance with results cached — it does NOT return a ``list``.
-    This means the result is both inspectable synchronously and still
-    chainable for further filtering.
+    Awaiting produces an ``EvaluatedQuerySet[M]`` with rows cached — see that
+    class for synchronous indexing, ``len()``, and iteration.
 
     Examples::
 
-        # Await → QuerySet (chain-able, len-able, iterable)
-        results = await Author.objects.filter(active=True)
-        assert len(results) == 3
-        assert all(r.active for r in results)
-        narrowed = await results.filter(age__gte=18)
+        # Chain, then await
+        qs = Author.objects.filter(active=True).order_by("-created_at")
+        results = await qs             # EvaluatedQuerySet[Author]
+        results[0].name                # str — direct, no await
 
-        # Async iteration (no intermediate list)
+        # Async iteration (streams without materialising all rows)
         async for author in Author.objects.order_by("name"):
             print(author.name)
 
-        # Chain, then await
-        qs = Author.objects.filter(active=True).order_by("-created_at")[:20]
-        page = await qs   # QuerySet[Author]
+        # Await a single object
+        author = await Author.objects.get(pk=1)   # Author
     """
 
     # ── Filtering ─────────────────────────────────────────────────────────
@@ -140,20 +136,14 @@ class QuerySet[M]:
     # ── Async protocol ────────────────────────────────────────────────────
     def __aiter__(self) -> AsyncIterator[M]: ...
 
-    # Awaiting returns the QuerySet itself (evaluated, rows cached).
-    # The result is QuerySet[M], not list[M] — chaining still works.
-    def __await__(self) -> Generator[Any, None, QuerySet[M]]: ...
+    # Awaiting fetches all rows and returns an EvaluatedQuerySet (rows cached).
+    def __await__(self) -> Generator[Any, None, EvaluatedQuerySet[M]]: ...
 
     def iterator(self, chunk_size: int = 2000) -> AsyncIterator[M]: ...
 
-    # ── Synchronous collection protocol (valid after evaluation) ──────────
-    def __iter__(self)               -> Iterator[M]: ...
-    def __len__(self)                -> int: ...
-    def __bool__(self)               -> bool: ...
-    def __contains__(self, item: object) -> bool: ...
-    def __reversed__(self)           -> Iterator[M]: ...
-
     # ── Slicing ───────────────────────────────────────────────────────────
+    # Integer index on an *unevaluated* queryset is an async DB fetch.
+    # On an *evaluated* queryset use EvaluatedQuerySet.__getitem__ (returns M).
     @overload
     def __getitem__(self, key: int) -> Coroutine[Any, Any, M]: ...
     @overload
@@ -204,6 +194,50 @@ class QuerySet[M]:
 class RawQuerySet[M]:
     """Result of ``QuerySet.raw()`` — async-iterable over model instances."""
     def __aiter__(self) -> AsyncIterator[M]: ...
+
+# ── EvaluatedQuerySet ─────────────────────────────────────────────────────
+
+class EvaluatedQuerySet[M](QuerySet[M]):
+    """QuerySet with rows fetched from the database and held in an internal cache.
+
+    Returned by ``await qs``.  Supports synchronous access patterns identical
+    to Django's queryset API:
+
+    - ``results[0]``          →  ``M``                       (no ``await`` needed)
+    - ``results[0:3]``        →  ``EvaluatedQuerySet[M]``
+    - ``len(results)``        →  ``int``
+    - ``for r in results``    →  ``M``
+    - ``bool(results)``       →  ``bool``
+    - ``r in results``        →  ``bool``
+    - ``results.filter(...)`` →  ``QuerySet[M]``             (new unevaluated queryset)
+
+    Full example::
+
+        results = await Author.objects.filter(name="Alice")
+        assert len(results) == 1
+        assert results[0].name == "Alice"          # direct attribute access
+
+        # Still chainable — re-filtering starts a new DB round-trip
+        active = await results.filter(active=True)
+        assert len(active) <= len(results)
+    """
+
+    # Override __getitem__: integer access is synchronous on an evaluated queryset.
+    # The parent (QuerySet) has __getitem__(int) -> Coroutine[Any, Any, M];
+    # the override here narrows the return to M.
+    # type: ignore[override] suppresses the Liskov check for this specific case —
+    # the override is safe because after evaluation no async fetch is needed.
+    @overload  # type: ignore[override]
+    def __getitem__(self, key: int) -> M: ...
+    @overload
+    def __getitem__(self, key: slice) -> EvaluatedQuerySet[M]: ...  # pyright: ignore[reportIncompatibleMethodOverride]
+
+    # ── Synchronous collection protocol ───────────────────────────────────
+    def __iter__(self)               -> Iterator[M]: ...
+    def __len__(self)                -> int: ...
+    def __bool__(self)               -> bool: ...
+    def __contains__(self, item: object) -> bool: ...
+    def __reversed__(self)           -> Iterator[M]: ...
 
 # ── Manager ───────────────────────────────────────────────────────────────
 
