@@ -730,9 +730,30 @@ impl PyQuerySet {
             let model_class = clone_model_class(py, &slf.borrow().model_class);
             if idx >= 0 {
                 state.offset = Some(idx as u64);
+            } else {
+                // Negative index: reverse ordering and use abs offset
+                let abs_idx = (-idx - 1) as u64;
+                for o in &mut state.order_by {
+                    o.descending = !o.descending;
+                }
+                state.offset = Some(abs_idx);
             }
             state.limit = Some(1);
-            Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc: slf.borrow().transaction_arc.clone() })?.into_py(py))
+            return pyo3_async_runtimes::tokio::future_into_py(py, async move {
+                let rows = fetch_rows_for_state(&state)
+                    .await
+                    .map_err(|e| Python::with_gil(|_| crate::ormpi_err(e)))?;
+                Python::with_gil(|py| {
+                    if rows.is_empty() {
+                        return Err(pyo3::exceptions::PyIndexError::new_err("index out of range"));
+                    }
+                    match &model_class {
+                        Some(cls) => row_to_instance(py, &rows[0], cls),
+                        None => Ok(py.None()),
+                    }
+                })
+            })
+            .map(|b| b.into());
         } else if let Ok(slice) = key.downcast::<PySlice>() {
             let indices = slice.indices(i64::MAX as _)?;
             let mut state = slf.borrow().state.clone();
@@ -812,12 +833,35 @@ impl PyQuerySet {
         let py = slf.py();
         let state = slf.borrow().state.clone();
         let model_class = clone_model_class(py, &slf.borrow().model_class);
-        let iter = PyAsyncIter {
-            state,
-            model_class,
-            cache: None,
-            pos: 0,
-        };
+        let iter = PyAsyncIter { state, model_class, cache: None, pos: 0 };
+        Ok(Py::new(py, iter)?.into_py(py))
+    }
+
+    /// Reverse the current ordering (or default to pk DESC if no ordering is set).
+    fn reverse(slf: Bound<'_, Self>) -> PyResult<PyObject> {
+        use crate::query::iter::PyAsyncIter;
+        let py = slf.py();
+        let mut state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+        if state.order_by.is_empty() {
+            state.order_by = vec![OrderSpec { field: "id".to_string(), descending: true, nulls_last: false, nulls_first: false }];
+        } else {
+            for o in &mut state.order_by {
+                o.descending = !o.descending;
+            }
+        }
+        Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc: slf.borrow().transaction_arc.clone() })?.into_py(py))
+    }
+
+    /// Return an async iterator, optionally fetching in `chunk_size` batches.
+    #[pyo3(signature = (chunk_size = 2000))]
+    fn iterator(slf: Bound<'_, Self>, chunk_size: usize) -> PyResult<PyObject> {
+        use crate::query::iter::PyAsyncIter;
+        let _ = chunk_size; // batch streaming is a future optimisation; fetch all rows
+        let py = slf.py();
+        let state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+        let iter = PyAsyncIter { state, model_class, cache: None, pos: 0 };
         Ok(Py::new(py, iter)?.into_py(py))
     }
 
