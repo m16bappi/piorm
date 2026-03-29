@@ -8,6 +8,7 @@ use pyo3::types::PyModule;
 
 pub fn register_query(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<queryset::PyQuerySet>()?;
+    m.add_class::<queryset::PyRawQuerySet>()?;
     m.add_class::<q::PyQ>()?;
     m.add_class::<iter::PyAsyncIter>()?;
     m.add_class::<aggregate::PyCount>()?;

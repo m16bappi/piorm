@@ -1,3 +1,6 @@
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 
@@ -28,6 +31,73 @@ fn clone_model_class(py: Python<'_>, mc: &Option<PyObject>) -> Option<PyObject> 
 type TxnArc = std::sync::Arc<
     tokio::sync::Mutex<Option<ormpi_core::transaction::OrmpiTransaction>>,
 >;
+
+/// Async iterable returned by `QuerySet.raw()` / `Manager.raw()`.
+#[pyclass(name = "RawQuerySet")]
+pub struct PyRawQuerySet {
+    sql: String,
+    params: Vec<OrmpiValue>,
+    db_alias: String,
+    model_class: Option<PyObject>,
+    rows: Arc<Mutex<Option<Vec<PyObject>>>>,
+    index: Arc<AtomicUsize>,
+}
+
+#[pymethods]
+impl PyRawQuerySet {
+    fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __anext__(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let sql = self.sql.clone();
+        let params = self.params.clone();
+        let db_alias = self.db_alias.clone();
+        let model_class = self.model_class.as_ref().map(|m| m.clone_ref(py));
+        let rows_arc = self.rows.clone();
+        let index_arc = self.index.clone();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            // Check if rows need fetching (release lock before await).
+            let needs_fetch = rows_arc.lock().unwrap().is_none();
+
+            if needs_fetch {
+                let pool = {
+                    let reg = ormpi_core::registry::DatabaseRegistry::global();
+                    let guard = reg.read().unwrap();
+                    guard.get_pool(&db_alias)
+                        .map_err(|e| Python::with_gil(|_| crate::ormpi_err(e)))?
+                        .clone()
+                };
+                let fetched = ormpi_core::executor::fetch_all_raw(&pool, &sql, &params)
+                    .await
+                    .map_err(|e| Python::with_gil(|_| crate::ormpi_err(e)))?;
+                let py_rows: Vec<PyObject> = Python::with_gil(|py| {
+                    fetched.iter().map(|row| {
+                        match &model_class {
+                            Some(cls) => row_to_instance(py, row, cls).unwrap_or_else(|_| py.None()),
+                            None => py.None(),
+                        }
+                    }).collect()
+                });
+                let mut guard = rows_arc.lock().unwrap();
+                if guard.is_none() {
+                    *guard = Some(py_rows);
+                }
+            }
+
+            let idx = index_arc.fetch_add(1, Ordering::SeqCst);
+            let guard = rows_arc.lock().unwrap();
+            let rows = guard.as_ref().unwrap();
+            if idx < rows.len() {
+                Ok(Python::with_gil(|py| rows[idx].clone_ref(py)))
+            } else {
+                Err(pyo3::exceptions::PyStopAsyncIteration::new_err(()))
+            }
+        })
+        .map(|b| b.into())
+    }
+}
 
 /// Python-facing QuerySet — accumulates query state, evaluates lazily.
 #[pyclass(name = "QuerySet")]
@@ -154,6 +224,30 @@ fn rows_to_py(
                 })
                 .collect();
             Ok(PyList::new_bound(py, dicts?).into())
+        }
+        ResultType::ValuesList(fields) => {
+            let tuples: Vec<PyObject> = rows
+                .iter()
+                .map(|row| {
+                    let vals: Vec<PyObject> = if fields.is_empty() {
+                        row.values.values().map(|v| ormpi_value_to_py(py, v)).collect()
+                    } else {
+                        fields
+                            .iter()
+                            .map(|f| ormpi_value_to_py(py, row.values.get(f).unwrap_or(&OrmpiValue::Null)))
+                            .collect()
+                    };
+                    pyo3::types::PyTuple::new_bound(py, vals).into()
+                })
+                .collect();
+            Ok(PyList::new_bound(py, tuples).into())
+        }
+        ResultType::FlatList(field) => {
+            let items: Vec<PyObject> = rows
+                .iter()
+                .map(|row| ormpi_value_to_py(py, row.values.get(field).unwrap_or(&OrmpiValue::Null)))
+                .collect();
+            Ok(PyList::new_bound(py, items).into())
         }
         _ => match model_class {
             Some(cls) => {
@@ -536,6 +630,7 @@ impl PyQuerySet {
     }
 
     /// Restrict columns to `fields` only.
+    #[pyo3(signature = (*fields))]
     fn only(slf: Bound<'_, Self>, fields: Vec<String>) -> PyResult<PyObject> {
         let py = slf.py();
         let mut state = slf.borrow().state.clone();
@@ -545,6 +640,7 @@ impl PyQuerySet {
     }
 
     /// Defer loading of the specified columns.
+    #[pyo3(signature = (*fields))]
     fn defer(slf: Bound<'_, Self>, fields: Vec<String>) -> PyResult<PyObject> {
         let py = slf.py();
         let mut state = slf.borrow().state.clone();
@@ -553,12 +649,74 @@ impl PyQuerySet {
         Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc: slf.borrow().transaction_arc.clone() })?.into_py(py))
     }
 
+    /// Return the earliest row ordered by `field` ASC.
+    fn earliest(slf: Bound<'_, Self>, field: String) -> PyResult<PyObject> {
+        let qs = slf.call_method1("order_by", (field,))?;
+        qs.call_method0("first").map(|r| r.into())
+    }
+
+    /// Return the latest row ordered by `field` DESC.
+    fn latest(slf: Bound<'_, Self>, field: String) -> PyResult<PyObject> {
+        let desc = format!("-{}", field);
+        let qs = slf.call_method1("order_by", (desc,))?;
+        qs.call_method0("first").map(|r| r.into())
+    }
+
+    /// Execute a raw SQL SELECT and return an async iterable of model instances.
+    #[pyo3(signature = (sql, params = None))]
+    fn raw(slf: Bound<'_, Self>, sql: String, params: Option<Vec<PyObject>>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+        let db_alias = state.database.clone().unwrap_or_else(|| "default".to_string());
+
+        let ormpi_params: Vec<OrmpiValue> = match params {
+            Some(list) => list.iter()
+                .map(|obj| crate::model::instance::py_to_ormpi_value(obj.bind(py)))
+                .collect::<PyResult<Vec<_>>>()?,
+            None => vec![],
+        };
+
+        let raw_qs = PyRawQuerySet {
+            sql,
+            params: ormpi_params,
+            db_alias,
+            model_class,
+            rows: Arc::new(Mutex::new(None)),
+            index: Arc::new(AtomicUsize::new(0)),
+        };
+        Ok(Py::new(py, raw_qs)?.into_py(py))
+    }
+
     /// Return a QuerySet that evaluates to dicts instead of model instances.
-    fn values(slf: Bound<'_, Self>) -> PyResult<PyObject> {
+    #[pyo3(signature = (*fields))]
+    fn values(slf: Bound<'_, Self>, fields: Vec<String>) -> PyResult<PyObject> {
         let py = slf.py();
         let mut state = slf.borrow().state.clone();
         let model_class = clone_model_class(py, &slf.borrow().model_class);
         state.result_type = ResultType::Values;
+        if !fields.is_empty() {
+            state.select_fields = SelectFields::Only(fields);
+        }
+        Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc: slf.borrow().transaction_arc.clone() })?.into_py(py))
+    }
+
+    /// Return a QuerySet that evaluates to a list of tuples (or flat list when flat=True).
+    #[pyo3(signature = (*fields, flat = false))]
+    fn values_list(slf: Bound<'_, Self>, fields: Vec<String>, flat: bool) -> PyResult<PyObject> {
+        let py = slf.py();
+        let mut state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
+        if flat {
+            let field = fields.into_iter().next().unwrap_or_default();
+            state.select_fields = SelectFields::Only(vec![field.clone()]);
+            state.result_type = ResultType::FlatList(field);
+        } else {
+            if !fields.is_empty() {
+                state.select_fields = SelectFields::Only(fields.clone());
+            }
+            state.result_type = ResultType::ValuesList(fields);
+        }
         Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc: slf.borrow().transaction_arc.clone() })?.into_py(py))
     }
 

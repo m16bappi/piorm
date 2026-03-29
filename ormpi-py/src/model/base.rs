@@ -142,9 +142,50 @@ impl PyManager {
         qs.bind(py).call_method0("last").map(|r| r.into())
     }
 
-    fn values(&self, py: Python<'_>) -> PyResult<PyObject> {
+    #[pyo3(signature = (*fields))]
+    fn only(&self, py: Python<'_>, fields: Vec<String>) -> PyResult<PyObject> {
         let qs = self.get_queryset(py)?;
-        qs.bind(py).call_method0("values").map(|r| r.into())
+        let py_fields = pyo3::types::PyTuple::new_bound(py, fields.iter().map(|s| s.as_str()));
+        qs.bind(py).call_method1("only", &py_fields).map(|r| r.into())
+    }
+
+    #[pyo3(signature = (*fields))]
+    fn defer(&self, py: Python<'_>, fields: Vec<String>) -> PyResult<PyObject> {
+        let qs = self.get_queryset(py)?;
+        let py_fields = pyo3::types::PyTuple::new_bound(py, fields.iter().map(|s| s.as_str()));
+        qs.bind(py).call_method1("defer", &py_fields).map(|r| r.into())
+    }
+
+    fn earliest(&self, py: Python<'_>, field: String) -> PyResult<PyObject> {
+        let qs = self.get_queryset(py)?;
+        qs.bind(py).call_method1("earliest", (field,)).map(|r| r.into())
+    }
+
+    fn latest(&self, py: Python<'_>, field: String) -> PyResult<PyObject> {
+        let qs = self.get_queryset(py)?;
+        qs.bind(py).call_method1("latest", (field,)).map(|r| r.into())
+    }
+
+    #[pyo3(signature = (sql, params = None))]
+    fn raw(&self, py: Python<'_>, sql: String, params: Option<PyObject>) -> PyResult<PyObject> {
+        let qs = self.get_queryset(py)?;
+        qs.bind(py).call_method1("raw", (sql, params)).map(|r| r.into())
+    }
+
+    #[pyo3(signature = (*fields))]
+    fn values(&self, py: Python<'_>, fields: Vec<String>) -> PyResult<PyObject> {
+        let qs = self.get_queryset(py)?;
+        let py_fields = pyo3::types::PyTuple::new_bound(py, fields.iter().map(|s| s.as_str()));
+        qs.bind(py).call_method1("values", &py_fields).map(|r| r.into())
+    }
+
+    #[pyo3(signature = (*fields, flat = false))]
+    fn values_list(&self, py: Python<'_>, fields: Vec<String>, flat: bool) -> PyResult<PyObject> {
+        let qs = self.get_queryset(py)?;
+        let kwargs = pyo3::types::PyDict::new_bound(py);
+        kwargs.set_item("flat", flat)?;
+        let py_fields = pyo3::types::PyTuple::new_bound(py, fields.iter().map(|s| s.as_str()));
+        qs.bind(py).call_method("values_list", py_fields, Some(&kwargs)).map(|r| r.into())
     }
 
     #[pyo3(signature = (**kwargs))]

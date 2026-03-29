@@ -32,6 +32,36 @@ pub async fn fetch_one_raw(
     }
 }
 
+/// Execute a raw SELECT with optional positional params and return all rows as `OrmpiRow`.
+pub async fn fetch_all_raw(
+    pool: &OrmpiPool,
+    sql: &str,
+    params: &[crate::value::OrmpiValue],
+) -> crate::Result<Vec<crate::row::OrmpiRow>> {
+    use sea_query::Values;
+    use crate::bind::{mysql_arguments, postgres_arguments, sqlite_arguments};
+    use crate::row::{mysql_row_to_ormpi, postgres_row_to_ormpi, sqlite_row_to_ormpi};
+
+    let sea_vals = Values(params.iter().map(|v| v.to_sea_value()).collect());
+    match pool {
+        OrmpiPool::Sqlite(p) => {
+            let args = sqlite_arguments(sea_vals);
+            let rows = sqlx::query_with(sql, args).fetch_all(p).await?;
+            rows.iter().map(sqlite_row_to_ormpi).collect()
+        }
+        OrmpiPool::Mysql(p) => {
+            let args = mysql_arguments(sea_vals);
+            let rows = sqlx::query_with(sql, args).fetch_all(p).await?;
+            rows.iter().map(mysql_row_to_ormpi).collect()
+        }
+        OrmpiPool::Postgres(p) => {
+            let args = postgres_arguments(sea_vals);
+            let rows = sqlx::query_with(sql, args).fetch_all(p).await?;
+            rows.iter().map(postgres_row_to_ormpi).collect()
+        }
+    }
+}
+
 pub fn fetch_row_sqlite(row: &sqlx::sqlite::SqliteRow) -> Vec<(String, serde_json::Value)> {
     row_to_json_sqlite(row)
 }
