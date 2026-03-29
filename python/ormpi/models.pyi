@@ -118,9 +118,10 @@ class Model:
         ...
 
     # ── Inner Meta ─────────────────────────────────────────────────────
-    class Meta:
-        abstract:        ClassVar[bool]
-        db_table:        ClassVar[str]
-        ordering:        ClassVar[list[str]]
-        unique_together: ClassVar[list[list[str]]]
-        managed:         ClassVar[bool]
+    #
+    # Declared as ``ClassVar[type]`` (not a nested class) so that
+    # subclasses can freely define their own ``class Meta:`` without
+    # triggering ``reportIncompatibleVariableOverride``.  Recognised
+    # Meta options (db_table, ordering, …) are validated at runtime;
+    # typed access is available via the ``_meta: ModelOptions`` attribute.
+    Meta: ClassVar[type]
