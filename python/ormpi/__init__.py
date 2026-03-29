@@ -11,15 +11,15 @@ Canonical import patterns:
     from ormpi.exceptions import DoesNotExist, ValidationError
 """
 
+# ── Core setup ────────────────────────────────────────────────────────────
+from ormpi._core import close, execute_raw, get_version
+
 # ── Sub-modules ────────────────────────────────────────────────────────────
 import ormpi.db as db
 import ormpi.exceptions as exceptions
 import ormpi.expr as expr
 import ormpi.fields as fields
 import ormpi.transaction as transaction
-
-# ── Core setup ────────────────────────────────────────────────────────────
-from ormpi._core import close, execute_raw, get_version
 from ormpi.db import configure
 
 # ── Model ─────────────────────────────────────────────────────────────────

@@ -16,24 +16,12 @@ __all__ = [
     "Min",
 ]
 
-try:
-    from ormpi._core import Q, Aggregate, Count, Sum, Avg, Max, Min  # type: ignore[attr-defined]
-except ImportError:
-    # Pure-Python fallback used during stub-only / CI type-check runs
-    class Q:  # type: ignore[no-redef]
-        def __init__(self, **kwargs):  ...
-        def __and__(self, other): return other
-        def __or__(self, other): return other
-        def __invert__(self): return self
+from ormpi._core import Q, Count, Sum, Avg, Max, Min  # type: ignore[attr-defined]
 
-    class Aggregate:  # type: ignore[no-redef]
-        def __init__(self, field: str, **kwargs): ...
 
-    class Count(Aggregate): ...   # type: ignore[no-redef]
-    class Sum(Aggregate): ...     # type: ignore[no-redef]
-    class Avg(Aggregate): ...     # type: ignore[no-redef]
-    class Max(Aggregate): ...     # type: ignore[no-redef]
-    class Min(Aggregate): ...     # type: ignore[no-redef]
+class Aggregate:  # type: ignore[no-redef]
+    """Base class for aggregate functions."""
+    def __init__(self, field: str, **kwargs): ...
 
 
 class F:

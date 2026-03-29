@@ -18,7 +18,7 @@ from typing import Any, ClassVar
 
 from ormpi._core import Model as _BaseModel
 from ormpi._core import _register_model_class
-from ormpi.exceptions import DoesNotExist
+from ormpi.exceptions import DoesNotExist, MultipleObjectsReturned
 
 
 class _ModelMeta(type):
@@ -99,10 +99,15 @@ class Model(_BaseModel, metaclass=_ModelMeta):
         # and set _field_bits on the class (Task 14.1).
         _register_model_class(cls)
 
-        # Attach a model-specific DoesNotExist exception.
+        # Attach model-specific exception classes.
         cls.DoesNotExist = type(
             "DoesNotExist",
             (DoesNotExist,),
+            {"__module__": cls.__module__},
+        )
+        cls.MultipleObjectsReturned = type(
+            "MultipleObjectsReturned",
+            (MultipleObjectsReturned,),
             {"__module__": cls.__module__},
         )
 

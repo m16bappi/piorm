@@ -408,7 +408,7 @@ impl PyQuerySet {
 
         // Positional Q objects
         for arg in args.iter() {
-            let q = arg.downcast::<PyQ>().map_err(|_| {
+            let q = arg.extract::<PyRef<PyQ>>().map_err(|_| {
                 pyo3::exceptions::PyTypeError::new_err(
                     "filter() positional arguments must be Q objects",
                 )
@@ -416,7 +416,7 @@ impl PyQuerySet {
             state
                 .filters
                 .filters
-                .push(FilterNode::Q(q.borrow().node.clone()));
+                .push(FilterNode::Q(q.node.clone()));
         }
 
         // Keyword filters
@@ -456,7 +456,7 @@ impl PyQuerySet {
         let model_class = clone_model_class(py, &slf.borrow().model_class);
 
         for arg in args.iter() {
-            let q = arg.downcast::<PyQ>().map_err(|_| {
+            let q = arg.extract::<PyRef<PyQ>>().map_err(|_| {
                 pyo3::exceptions::PyTypeError::new_err(
                     "exclude() positional arguments must be Q objects",
                 )
@@ -464,7 +464,7 @@ impl PyQuerySet {
             state
                 .filters
                 .excludes
-                .push(FilterNode::Q(q.borrow().node.clone()));
+                .push(FilterNode::Q(q.node.clone()));
         }
 
         if let Some(kw) = kwargs {
@@ -810,18 +810,41 @@ impl PyQuerySet {
                 .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
 
             Python::with_gil(|py| match rows.len() {
-                0 => Err(pyo3::exceptions::PyException::new_err(format!(
-                    "{}.DoesNotExist: {} matching query does not exist.",
-                    state.model_name, state.model_name
-                ))),
+                0 => {
+                    let exc_msg = format!(
+                        "{} matching query does not exist.",
+                        state.model_name
+                    );
+                    // Try model-specific DoesNotExist first (e.g. Author.DoesNotExist)
+                    if let Some(cls) = &model_class {
+                        if let Ok(attr) = cls.bind(py).getattr("DoesNotExist") {
+                            if let Ok(exc_type) = attr.downcast_into::<pyo3::types::PyType>() {
+                                return Err(PyErr::from_type_bound(exc_type, exc_msg));
+                            }
+                        }
+                    }
+                    // Fallback: ormpi.exceptions.DoesNotExist
+                    let exceptions = py.import_bound("ormpi.exceptions")?;
+                    let exc_type = exceptions.getattr("DoesNotExist")?
+                        .downcast_into::<pyo3::types::PyType>()
+                        .map_err(|_| pyo3::exceptions::PyTypeError::new_err("DoesNotExist is not a type"))?;
+                    Err(PyErr::from_type_bound(exc_type, exc_msg))
+                }
                 1 => match &model_class {
                     Some(cls) => row_to_instance(py, &rows[0], cls),
                     None => Ok(py.None()),
                 },
-                n => Err(pyo3::exceptions::PyException::new_err(format!(
-                    "get() returned more than one {}: {} objects returned",
-                    state.model_name, n
-                ))),
+                n => {
+                    let exc_msg = format!(
+                        "get() returned more than one {}: {} objects returned",
+                        state.model_name, n
+                    );
+                    let exceptions = py.import_bound("ormpi.exceptions")?;
+                    let exc_type = exceptions.getattr("MultipleObjectsReturned")?
+                        .downcast_into::<pyo3::types::PyType>()
+                        .map_err(|_| pyo3::exceptions::PyTypeError::new_err("MultipleObjectsReturned is not a type"))?;
+                    Err(PyErr::from_type_bound(exc_type, exc_msg))
+                }
             })
         })
         .map(|b| b.into())
