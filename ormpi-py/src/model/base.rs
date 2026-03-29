@@ -254,16 +254,19 @@ impl PyManager {
         qs.bind(py).call_method("prefetch_related", &args, None).map(|r| r.into())
     }
 
-    #[pyo3(signature = (objs, batch_size = None))]
+    #[pyo3(signature = (objs, batch_size = None, ignore_conflicts = false))]
     fn bulk_create(
         &self,
         py: Python<'_>,
         objs: Vec<PyObject>,
         batch_size: Option<usize>,
+        ignore_conflicts: bool,
     ) -> PyResult<PyObject> {
         let qs = self.get_queryset(py)?;
+        let kwargs = pyo3::types::PyDict::new_bound(py);
+        kwargs.set_item("ignore_conflicts", ignore_conflicts)?;
         qs.bind(py)
-            .call_method("bulk_create", (objs, batch_size), None)
+            .call_method("bulk_create", (objs, batch_size), Some(&kwargs))
             .map(|r| r.into())
     }
 

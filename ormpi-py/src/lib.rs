@@ -286,23 +286,53 @@ fn execute_sql(py: Python<'_>, sql: String, alias: &str) -> PyResult<PyObject> {
     pyo3_async_runtimes::tokio::future_into_py(py, future).map(|b| b.into())
 }
 
-/// execute_raw(sql, alias="default") -> Awaitable[list[tuple[str, Any]]]
+/// execute_raw(sql, params=None, alias="default") -> Awaitable[list[list[Any]]]
+///
+/// Executes raw SQL with optional positional parameters.
+/// Returns a list of rows (each row is a list of column values) for SELECT statements,
+/// or an empty list for DDL/DML statements.
 #[pyfunction]
-#[pyo3(signature = (sql, alias = "default"))]
-fn execute_raw(py: Python<'_>, sql: String, alias: &str) -> PyResult<PyObject> {
+#[pyo3(signature = (sql, params = None, alias = "default"))]
+fn execute_raw(
+    py: Python<'_>,
+    sql: String,
+    params: Option<Vec<PyObject>>,
+    alias: &str,
+) -> PyResult<PyObject> {
     let alias = alias.to_string();
-    // Clone the pool out of the registry before entering the async block
-    // so the RwLockGuard (not Send) is not held across awaits.
     let pool = {
         let registry = ormpi_core::registry::DatabaseRegistry::global();
         let guard = registry.read().unwrap();
         guard.get_pool(&alias).map_err(ormpi_err)?.clone()
     };
+
+    // Convert Python params to OrmpiValue while we hold the GIL.
+    let ormpi_params: Vec<ormpi_core::value::OrmpiValue> = params
+        .unwrap_or_default()
+        .iter()
+        .map(|p| crate::model::instance::py_to_ormpi_value(p.bind(py)))
+        .collect::<PyResult<_>>()?;
+
     let future = async move {
-        ormpi_core::executor::fetch_one_raw(&pool, &sql)
+        let rows = ormpi_core::executor::fetch_all_raw(&pool, &sql, &ormpi_params)
             .await
-            .map(Row)
-            .map_err(ormpi_err)
+            .map_err(ormpi_err)?;
+
+        Python::with_gil(|py| {
+            let outer = PyList::empty_bound(py);
+            for row in &rows {
+                let inner = PyList::empty_bound(py);
+                for col in &row.columns {
+                    let val = row
+                        .values
+                        .get(col)
+                        .unwrap_or(&ormpi_core::value::OrmpiValue::Null);
+                    inner.append(crate::convert::value_to_py(py, val)).unwrap();
+                }
+                outer.append(&inner).unwrap();
+            }
+            Ok::<PyObject, PyErr>(outer.into())
+        })
     };
     pyo3_async_runtimes::tokio::future_into_py(py, future).map(|b| b.into())
 }

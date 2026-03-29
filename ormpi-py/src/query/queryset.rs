@@ -1768,15 +1768,27 @@ impl PyQuerySet {
     }
 
     /// Async — INSERT a list of model instances in batches.
-    /// Returns the number of rows created.
-    #[pyo3(signature = (objs, batch_size = None))]
+    /// Returns a list of the inserted model instances with PKs populated.
+    #[pyo3(signature = (objs, batch_size = None, ignore_conflicts = false))]
     fn bulk_create(
         slf: Bound<'_, Self>,
         objs: Vec<PyObject>,
         batch_size: Option<usize>,
+        ignore_conflicts: bool,
     ) -> PyResult<PyObject> {
         let py = slf.py();
+
+        if objs.is_empty() {
+            return pyo3_async_runtimes::tokio::future_into_py(py, async move {
+                Python::with_gil(|py| {
+                    Ok::<PyObject, PyErr>(pyo3::types::PyList::empty_bound(py).into())
+                })
+            })
+            .map(|b| b.into());
+        }
+
         let state = slf.borrow().state.clone();
+        let model_class = clone_model_class(py, &slf.borrow().model_class);
 
         // Extract _values from each object (must happen while we hold the GIL).
         let rows: Vec<Vec<(String, ormpi_core::value::OrmpiValue)>> = objs
@@ -1799,6 +1811,7 @@ impl PyQuerySet {
             })
             .collect::<PyResult<_>>()?;
 
+        let rows_clone = rows.clone();
         let chunk = batch_size.unwrap_or(1000);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -1830,11 +1843,40 @@ impl PyQuerySet {
                     .clone()
             };
 
-            let count = bulk_create_rows(rows, chunk, &pool, &backend, &model_def)
+            let pks = bulk_create_rows(rows, chunk, &pool, &backend, &model_def, ignore_conflicts)
                 .await
                 .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
 
-            Python::with_gil(|py| Ok::<PyObject, PyErr>(count.into_py(py)))
+            Python::with_gil(|py| {
+                let pk_field = model_def.pk_field.clone();
+                let instances: Vec<PyObject> = rows_clone
+                    .iter()
+                    .zip(pks.iter().chain(std::iter::repeat(&0i64)))
+                    .map(|(row_vals, &pk)| {
+                        let instance = match &model_class {
+                            Some(cls) => match cls.bind(py).call0() {
+                                Ok(inst) => inst,
+                                Err(_) => return py.None(),
+                            },
+                            None => return py.None(),
+                        };
+                        if let Ok(values_obj) = instance.getattr("_values") {
+                            if let Ok(d) = values_obj.downcast::<PyDict>() {
+                                for (k, v) in row_vals {
+                                    let _ = d.set_item(k, ormpi_value_to_py(py, v));
+                                }
+                                let _ = d.set_item(&pk_field, pk);
+                            }
+                        }
+                        let _ = instance.setattr("_dirty", 0u64);
+                        let _ = instance.setattr("_adding", false);
+                        instance.into()
+                    })
+                    .collect();
+                Ok::<PyObject, PyErr>(
+                    pyo3::types::PyList::new_bound(py, &instances).into(),
+                )
+            })
         })
         .map(|b| b.into())
     }

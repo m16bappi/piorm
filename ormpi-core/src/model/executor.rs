@@ -228,6 +228,59 @@ pub fn find_cascade_children(parent_model_name: &str) -> Vec<(ModelDef, String)>
     children
 }
 
+/// Find all (child_model_def, fk_column_name) pairs with SET_NULL behaviour
+/// that reference the given parent model.
+pub fn find_set_null_children(parent_model_name: &str) -> Vec<(ModelDef, String)> {
+    let reg = ModelRegistry::global();
+    let guard = reg.read().unwrap();
+    let mut children = Vec::new();
+    for child_def in guard.all() {
+        for field in child_def.fields.values() {
+            let (to, on_delete) = match &field.field_type {
+                FieldType::ForeignKey { to, on_delete, .. } => (to.as_str(), on_delete),
+                FieldType::OneToOne { to, on_delete } => (to.as_str(), on_delete),
+                _ => continue,
+            };
+            if to == parent_model_name && matches!(on_delete, OnDelete::SetNull) {
+                children.push((child_def.clone(), field.column_name()));
+            }
+        }
+    }
+    children
+}
+
+/// SET fk_col = NULL on child rows where fk_col = pk_value.
+async fn set_null_children_by_pk(
+    pool: &OrmpiPool,
+    backend: &QueryBackend,
+    child_table: &str,
+    fk_col: &str,
+    pk_value: &OrmpiValue,
+) -> Result<usize> {
+    use sea_query::{Alias, Expr, Query};
+    let stmt = Query::update()
+        .table(Alias::new(child_table))
+        .value(Alias::new(fk_col), sea_query::Value::Int(None))
+        .and_where(Expr::col(Alias::new(fk_col)).eq(pk_value.to_sea_value()))
+        .to_owned();
+    let (sql, sea_vals) = backend.build_update(&stmt);
+    let rows = match pool {
+        OrmpiPool::Sqlite(p) => {
+            sqlx::query_with(&sql, sqlite_arguments(sea_vals))
+                .execute(p).await?.rows_affected() as usize
+        }
+        OrmpiPool::Mysql(p) => {
+            sqlx::query_with(&sql, mysql_arguments(sea_vals))
+                .execute(p).await?.rows_affected() as usize
+        }
+        OrmpiPool::Postgres(p) => {
+            sqlx::query_with(&sql, postgres_arguments(sea_vals))
+                .execute(p).await?.rows_affected() as usize
+        }
+    };
+    Ok(rows)
+}
+
 /// Delete child rows where `fk_col = pk_value` for a single parent PK.
 async fn delete_children_by_pk(
     pool: &OrmpiPool,
@@ -302,6 +355,14 @@ pub async fn delete_instance(
 ) -> Result<(usize, HashMap<String, usize>)> {
     let backend = QueryBackend(pool.backend());
     let mut counts: HashMap<String, usize> = HashMap::new();
+
+    // SET_NULL: nullify FK on referencing children before deleting parent.
+    let set_null_children = find_set_null_children(&model_def.model_name);
+    for (child_def, fk_col) in &set_null_children {
+        set_null_children_by_pk(pool, &backend, &child_def.table_name, fk_col, &pk_value).await?;
+        // SET_NULL doesn't delete rows, so we don't add to counts.
+        let _ = child_def; // suppress unused warning
+    }
 
     // Cascade: delete children first.
     let children = find_cascade_children(&model_def.model_name);

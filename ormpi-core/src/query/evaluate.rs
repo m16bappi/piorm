@@ -444,25 +444,25 @@ pub async fn bulk_delete(
 }
 
 /// Batch-INSERT rows in chunks of `batch_size`.
-/// Returns the total number of rows inserted.
+/// Returns a `Vec<i64>` of the assigned primary keys (sequential from last_insert_rowid for SQLite).
 pub async fn bulk_create_rows(
     rows: Vec<Vec<(String, OrmpiValue)>>,
     batch_size: usize,
     pool: &OrmpiPool,
     backend: &QueryBackend,
     model_def: &ModelDef,
-) -> Result<usize> {
+    ignore_conflicts: bool,
+) -> Result<Vec<i64>> {
     if rows.is_empty() {
-        return Ok(0);
+        return Ok(vec![]);
     }
     let table = Alias::new(&model_def.table_name);
-    let mut total = 0usize;
+    let mut all_pks: Vec<i64> = Vec::with_capacity(rows.len());
 
     for chunk in rows.chunks(batch_size) {
         if chunk.is_empty() {
             continue;
         }
-        // Determine columns from the first row.
         let first = &chunk[0];
         let col_names: Vec<String> = first
             .iter()
@@ -479,25 +479,41 @@ pub async fn bulk_create_rows(
                 .map_err(|e| OrmpiError::Other(e.to_string()))?;
         }
 
+        if ignore_conflicts {
+            stmt.on_conflict(sea_query::OnConflict::new().do_nothing().to_owned());
+        }
+
         let (sql, sea_vals) = backend.build_insert(&stmt);
+        let chunk_len = chunk.len() as i64;
 
         match pool {
             OrmpiPool::Sqlite(p) => {
                 let args = sqlite_arguments(sea_vals);
-                sqlx::query_with(&sql, args).execute(p).await?;
+                let result = sqlx::query_with(&sql, args).execute(p).await?;
+                let last_id = result.last_insert_rowid();
+                for pk in (last_id - chunk_len + 1)..=last_id {
+                    all_pks.push(pk);
+                }
             }
             OrmpiPool::Mysql(p) => {
                 let args = mysql_arguments(sea_vals);
-                sqlx::query_with(&sql, args).execute(p).await?;
+                let result = sqlx::query_with(&sql, args).execute(p).await?;
+                let last_id = result.last_insert_id() as i64;
+                for pk in (last_id - chunk_len + 1)..=last_id {
+                    all_pks.push(pk);
+                }
             }
             OrmpiPool::Postgres(p) => {
                 let args = postgres_arguments(sea_vals);
                 sqlx::query_with(&sql, args).execute(p).await?;
+                // PKs not reliably available without RETURNING; fill with 0.
+                for _ in 0..chunk_len {
+                    all_pks.push(0);
+                }
             }
         }
-        total += chunk.len();
     }
-    Ok(total)
+    Ok(all_pks)
 }
 
 /// UPDATE a single row identified by its primary key.
