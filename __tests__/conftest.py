@@ -6,22 +6,16 @@ defined once at module level (registered in Rust on first import) and
 their tables are created before each test, then dropped after.
 """
 
-import pytest
 import pytest_asyncio
 import ormpi
 from ormpi.fields import (
-    BigIntegerField,
     BooleanField,
     CharField,
-    DateField,
-    DateTimeField,
-    DecimalField,
     FloatField,
     ForeignKey,
     IntegerField,
     JSONField,
     TextField,
-    UUIDField,
     CASCADE,
 )
 from ormpi.db import create_all_tables
