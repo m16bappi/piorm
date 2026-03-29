@@ -148,10 +148,15 @@ pub fn find_reverse_relation<'a>(
                 }
             }
 
-            // Fall back to the default reverse manager name: lowercase model name.
+            // Fall back to the default reverse manager name: lowercase model name,
+            // "{name}_set", or simple plural "{name}s".
             let default_name = model_def.model_name.to_lowercase();
             let default_set = format!("{}_set", default_name);
-            if lookup_name == default_name || lookup_name == default_set {
+            let default_plural = format!("{}s", default_name);
+            if lookup_name == default_name
+                || lookup_name == default_set
+                || lookup_name == default_plural
+            {
                 return Some((model_def, field.column_name(), base_pk));
             }
         }
