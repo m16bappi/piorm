@@ -130,7 +130,7 @@ pub fn model_to_ddl(model_def: &ModelDef, backend: QueryBackend) -> DdlStatement
         if m2m.through_model.is_some() {
             continue; // custom through model — user manages it
         }
-        let mut jt = Table::create()
+        let jt = Table::create()
             .table(Alias::new(&m2m.junction_table))
             .if_not_exists()
             .col(
