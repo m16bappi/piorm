@@ -122,20 +122,20 @@ impl PyMin {
 
 /// Extract an `AggregateExpr` from any of the Python aggregate wrapper objects.
 pub(crate) fn extract_aggregate_expr(obj: &Bound<'_, PyAny>) -> PyResult<AggregateExpr> {
-    if let Ok(c) = obj.downcast::<PyCount>() {
-        return Ok(c.borrow().inner.clone());
+    if let Ok(c) = obj.extract::<pyo3::PyRef<PyCount>>() {
+        return Ok(c.inner.clone());
     }
-    if let Ok(s) = obj.downcast::<PySum>() {
-        return Ok(s.borrow().inner.clone());
+    if let Ok(s) = obj.extract::<pyo3::PyRef<PySum>>() {
+        return Ok(s.inner.clone());
     }
-    if let Ok(a) = obj.downcast::<PyAvg>() {
-        return Ok(a.borrow().inner.clone());
+    if let Ok(a) = obj.extract::<pyo3::PyRef<PyAvg>>() {
+        return Ok(a.inner.clone());
     }
-    if let Ok(m) = obj.downcast::<PyMax>() {
-        return Ok(m.borrow().inner.clone());
+    if let Ok(m) = obj.extract::<pyo3::PyRef<PyMax>>() {
+        return Ok(m.inner.clone());
     }
-    if let Ok(m) = obj.downcast::<PyMin>() {
-        return Ok(m.borrow().inner.clone());
+    if let Ok(m) = obj.extract::<pyo3::PyRef<PyMin>>() {
+        return Ok(m.inner.clone());
     }
     Err(pyo3::exceptions::PyTypeError::new_err(
         "Expected an aggregate function (Count, Sum, Avg, Max, Min)",

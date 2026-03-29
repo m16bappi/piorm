@@ -10,7 +10,7 @@ use crate::query::filter::{FilterNode, Lookup, QNode};
 use crate::query::state::{QueryState, SelectFields};
 use crate::row::{mysql_row_to_ormpi, postgres_row_to_ormpi, sqlite_row_to_ormpi, OrmpiRow};
 use crate::transaction::{OrmpiTransaction, TransactionHandle};
-use crate::value::OrmpiValue;
+use crate::value::{FExprNode, FExprOp, OrmpiValue};
 use crate::{OrmpiError, Result};
 
 // Re-export for convenience in callers
@@ -313,7 +313,11 @@ pub async fn bulk_update(
 
     for (field_name, value) in updates {
         let col_name = resolve_column(&[field_name.clone()], model_def);
-        stmt.value(Alias::new(&col_name), value.to_sea_value());
+        if let OrmpiValue::FExpr(node) = value {
+            stmt.value(Alias::new(&col_name), fexpr_to_sea_expr(node, &model_def.table_name));
+        } else {
+            stmt.value(Alias::new(&col_name), value.to_sea_value());
+        }
     }
 
     for node in &state.filters.filters {
@@ -513,7 +517,11 @@ pub async fn update_row_by_pk(
 
     for (field_name, value) in updates {
         let col_name = resolve_column(&[field_name.clone()], model_def);
-        stmt.value(Alias::new(&col_name), value.to_sea_value());
+        if let OrmpiValue::FExpr(node) = value {
+            stmt.value(Alias::new(&col_name), fexpr_to_sea_expr(node, &model_def.table_name));
+        } else {
+            stmt.value(Alias::new(&col_name), value.to_sea_value());
+        }
     }
 
     stmt.cond_where(
@@ -577,6 +585,27 @@ pub async fn fetch_by_column_in(
             let args = postgres_arguments(binds);
             let rows = sqlx::query_with(&sql, args).fetch_all(p).await?;
             rows.iter().map(postgres_row_to_ormpi).collect()
+        }
+    }
+}
+
+/// Convert an F() expression tree into a sea-query `SimpleExpr` for use in UPDATE SET.
+fn fexpr_to_sea_expr(node: &FExprNode, table: &str) -> sea_query::SimpleExpr {
+    match node {
+        FExprNode::Field(name) => {
+            Expr::col((Alias::new(table), Alias::new(name.as_str()))).into()
+        }
+        FExprNode::Literal(val) => Expr::val(val.to_sea_value()).into(),
+        FExprNode::BinOp { lhs, op, rhs } => {
+            let l = fexpr_to_sea_expr(lhs, table);
+            let r = fexpr_to_sea_expr(rhs, table);
+            match op {
+                FExprOp::Add => l.add(r),
+                FExprOp::Sub => l.sub(r),
+                FExprOp::Mul => l.mul(r),
+                FExprOp::Div => l.div(r),
+                FExprOp::Mod => l.modulo(r),
+            }
         }
     }
 }

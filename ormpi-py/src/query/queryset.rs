@@ -200,6 +200,7 @@ pub(crate) fn ormpi_value_to_py(py: Python<'_>, value: &OrmpiValue) -> PyObject 
             let py_list: Vec<PyObject> = items.iter().map(|v| ormpi_value_to_py(py, v)).collect();
             py_list.into_py(py)
         }
+        OrmpiValue::FExpr(_) => py.None(),
     }
 }
 

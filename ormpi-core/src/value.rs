@@ -4,6 +4,28 @@ use rust_decimal::Decimal;
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
+/// Arithmetic operator for F() expression trees.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FExprOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+}
+
+/// A recursive F() expression tree node.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FExprNode {
+    Field(String),
+    BinOp {
+        lhs: Box<FExprNode>,
+        op: FExprOp,
+        rhs: Box<FExprNode>,
+    },
+    Literal(Box<OrmpiValue>),
+}
+
 /// A database column value, backend-agnostic.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OrmpiValue {
@@ -21,6 +43,7 @@ pub enum OrmpiValue {
     Json(JsonValue),
     Decimal(Decimal),
     List(Vec<OrmpiValue>),
+    FExpr(Box<FExprNode>),
 }
 
 impl OrmpiValue {
@@ -45,6 +68,15 @@ impl OrmpiValue {
                 d.to_f64().unwrap_or(f64::NAN),
             )),
             OrmpiValue::List(_) => sea_query::Value::Bytes(None), // handled specially in lookup_to_expr
+            OrmpiValue::FExpr(_) => sea_query::Value::Bytes(None), // never called; handled via fexpr_to_sea_expr
+        }
+    }
+
+    /// Convert this value into an `FExprNode` suitable for use in expression trees.
+    pub fn into_fexpr_node(self) -> FExprNode {
+        match self {
+            OrmpiValue::FExpr(node) => *node,
+            other => FExprNode::Literal(Box::new(other)),
         }
     }
 }

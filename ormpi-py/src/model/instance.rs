@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 
 use ormpi_core::model::registry::ModelRegistry;
-use ormpi_core::value::OrmpiValue;
+use ormpi_core::value::{FExprNode, FExprOp, OrmpiValue};
 
 use crate::convert::value_to_py;
 
@@ -51,6 +51,44 @@ pub(crate) fn py_to_ormpi_value(obj: &Bound<'_, PyAny>) -> PyResult<OrmpiValue> 
     }
     if let Ok(b) = obj.extract::<Vec<u8>>() {
         return Ok(OrmpiValue::Bytes(b));
+    }
+    // Detect F("field") or _FExpr by Python class name.
+    let type_name = obj.get_type().name()
+        .map(|n| n.extract::<String>().unwrap_or_default())
+        .unwrap_or_default();
+    if type_name == "_FExpr" {
+        if let (Ok(lhs_obj), Ok(op_obj), Ok(rhs_obj)) = (
+            obj.getattr("lhs"),
+            obj.getattr("op"),
+            obj.getattr("rhs"),
+        ) {
+            let op_s: String = op_obj.extract()?;
+            let lhs = py_to_ormpi_value(&lhs_obj)?;
+            let rhs = py_to_ormpi_value(&rhs_obj)?;
+            let op = match op_s.as_str() {
+                "+" => FExprOp::Add,
+                "-" => FExprOp::Sub,
+                "*" => FExprOp::Mul,
+                "/" => FExprOp::Div,
+                "%" => FExprOp::Mod,
+                other => return Err(pyo3::exceptions::PyValueError::new_err(
+                    format!("Unknown F() operator: {}", other)
+                )),
+            };
+            let node = FExprNode::BinOp {
+                lhs: Box::new(lhs.into_fexpr_node()),
+                op,
+                rhs: Box::new(rhs.into_fexpr_node()),
+            };
+            return Ok(OrmpiValue::FExpr(Box::new(node)));
+        }
+    }
+    if type_name == "F" {
+        if let Ok(name_obj) = obj.getattr("name") {
+            if let Ok(field_name) = name_obj.extract::<String>() {
+                return Ok(OrmpiValue::FExpr(Box::new(FExprNode::Field(field_name))));
+            }
+        }
     }
     // Model instance passed as FK value — extract pk.
     if let Ok(pk_attr) = obj.getattr("pk") {
