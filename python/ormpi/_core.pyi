@@ -3,7 +3,7 @@
 # Python 3.12+ only — no "from __future__ import annotations".
 
 from typing import Any, LiteralString, Literal, Self, final, overload
-from collections.abc import AsyncIterator, Coroutine, Generator
+from collections.abc import AsyncIterator, Coroutine, Generator, Iterator
 import datetime
 import decimal
 import uuid
@@ -82,18 +82,27 @@ class Transaction:
 class QuerySet[M]:
     """Lazy, chainable async query builder.
 
-    All filtering/ordering methods return a new ``QuerySet`` — queries are
-    not executed until awaited or iterated.
+    Queries are not executed until the queryset is awaited or async-iterated.
+    Awaiting a ``QuerySet`` fetches all rows and returns the **same**
+    ``QuerySet`` instance with results cached — it does NOT return a ``list``.
+    This means the result is both inspectable synchronously and still
+    chainable for further filtering.
 
-    Awaiting a ``QuerySet`` directly returns ``list[M]``::
+    Examples::
 
-        authors = await Author.objects.filter(active=True)
-        # authors: list[Author]
+        # Await → QuerySet (chain-able, len-able, iterable)
+        results = await Author.objects.filter(active=True)
+        assert len(results) == 3
+        assert all(r.active for r in results)
+        narrowed = await results.filter(age__gte=18)
 
-    Async iteration::
-
+        # Async iteration (no intermediate list)
         async for author in Author.objects.order_by("name"):
             print(author.name)
+
+        # Chain, then await
+        qs = Author.objects.filter(active=True).order_by("-created_at")[:20]
+        page = await qs   # QuerySet[Author]
     """
 
     # ── Filtering ─────────────────────────────────────────────────────────
@@ -131,10 +140,18 @@ class QuerySet[M]:
     # ── Async protocol ────────────────────────────────────────────────────
     def __aiter__(self) -> AsyncIterator[M]: ...
 
-    # __await__ allows ``results = await queryset`` → list[M]
-    def __await__(self) -> Generator[Any, None, list[M]]: ...
+    # Awaiting returns the QuerySet itself (evaluated, rows cached).
+    # The result is QuerySet[M], not list[M] — chaining still works.
+    def __await__(self) -> Generator[Any, None, QuerySet[M]]: ...
 
     def iterator(self, chunk_size: int = 2000) -> AsyncIterator[M]: ...
+
+    # ── Synchronous collection protocol (valid after evaluation) ──────────
+    def __iter__(self)               -> Iterator[M]: ...
+    def __len__(self)                -> int: ...
+    def __bool__(self)               -> bool: ...
+    def __contains__(self, item: object) -> bool: ...
+    def __reversed__(self)           -> Iterator[M]: ...
 
     # ── Slicing ───────────────────────────────────────────────────────────
     @overload
