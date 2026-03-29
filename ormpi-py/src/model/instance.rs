@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PySet, PyTuple};
+use pyo3::types::{PyDict, PyTuple};
 
 use ormpi_core::model::registry::ModelRegistry;
 use ormpi_core::value::OrmpiValue;
@@ -43,12 +43,12 @@ pub(crate) fn py_to_ormpi_value(obj: &Bound<'_, PyAny>) -> PyResult<OrmpiValue> 
     Ok(OrmpiValue::Text(json_str))
 }
 
-/// Extract `_ormpi_values` as `HashMap<String, OrmpiValue>` from a model instance.
+/// Extract `_values` as `HashMap<String, OrmpiValue>` from a model instance.
 pub(crate) fn extract_values(
     instance: &Bound<'_, PyAny>,
 ) -> PyResult<HashMap<String, OrmpiValue>> {
     let dict = instance
-        .getattr("_ormpi_values")?
+        .getattr("_values")?
         .downcast_into::<PyDict>()?;
     let mut map = HashMap::new();
     for (k, v) in dict.iter() {
@@ -59,16 +59,31 @@ pub(crate) fn extract_values(
     Ok(map)
 }
 
-/// Extract `_ormpi_dirty` as `HashSet<String>` from a model instance.
+/// Extract dirty field names from the `_dirty` integer bitmask on a model instance.
+///
+/// Reads `_dirty` (u64) from the instance and `_field_bits` (PyDict) from the class,
+/// then returns the set of field names whose bit is set.
 pub(crate) fn extract_dirty(instance: &Bound<'_, PyAny>) -> PyResult<HashSet<String>> {
-    let set = instance
-        .getattr("_ormpi_dirty")?
-        .downcast_into::<PySet>()?;
-    let mut hs = HashSet::new();
-    for item in set.iter() {
-        hs.insert(item.extract::<String>()?);
+    let dirty_mask: u64 = instance.getattr("_dirty")?.extract()?;
+
+    // Fast path: nothing is dirty — skip the class lookup entirely.
+    if dirty_mask == 0 {
+        return Ok(HashSet::new());
     }
-    Ok(hs)
+
+    let field_bits = instance
+        .get_type()
+        .getattr("_field_bits")?
+        .downcast_into::<PyDict>()?;
+
+    let mut dirty = HashSet::new();
+    for (name, bit) in field_bits.iter() {
+        let bit: u64 = bit.extract()?;
+        if dirty_mask & bit != 0 {
+            dirty.insert(name.extract::<String>()?);
+        }
+    }
+    Ok(dirty)
 }
 
 /// Return the Python class name for a model instance.
@@ -132,21 +147,15 @@ pub fn save(
 
         Python::with_gil(|py| {
             let instance = slf_py.bind(py);
-            // Write pk back into _ormpi_values
+            // Write pk back into _values
             let values_dict = instance
-                .getattr("_ormpi_values")?
+                .getattr("_values")?
                 .downcast_into::<PyDict>()?;
             values_dict.set_item(&model_def.pk_field, value_to_py(py, &pk))?;
-            // Clear dirty set
-            instance
-                .getattr("_ormpi_dirty")?
-                .call_method0("clear")?;
-            // Update state: adding=False, db=using
-            let state = instance
-                .getattr("_ormpi_state")?
-                .downcast_into::<PyDict>()?;
-            state.set_item("adding", false)?;
-            state.set_item("db", &using)?;
+            // Clear dirty bitmask, flip adding flag, record db alias.
+            instance.setattr("_dirty", 0u64)?;
+            instance.setattr("_adding", false)?;
+            instance.setattr("_db", &using)?;
             Ok(py.None())
         })
     })
@@ -242,7 +251,7 @@ pub fn refresh_from_db(
         Python::with_gil(|py| {
             let instance = slf_py.bind(py);
             let values_dict = instance
-                .getattr("_ormpi_values")?
+                .getattr("_values")?
                 .downcast_into::<PyDict>()?;
 
             for (col, json_val) in &fresh {
@@ -252,13 +261,12 @@ pub fn refresh_from_db(
                         continue;
                     }
                 }
-                let py_val = json_to_py(py, json_val.clone());
+                let ormpi_val = json_val_to_ormpi(json_val.clone());
+                let py_val = value_to_py(py, &ormpi_val);
                 values_dict.set_item(col, py_val)?;
             }
-            // Clear dirty after refresh.
-            instance
-                .getattr("_ormpi_dirty")?
-                .call_method0("clear")?;
+            // Clear dirty bitmask after refresh.
+            instance.setattr("_dirty", 0u64)?;
             Ok(py.None())
         })
     })
@@ -268,38 +276,28 @@ pub fn refresh_from_db(
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn get_is_adding(instance: &Bound<'_, PyAny>) -> PyResult<bool> {
-    // Default to True if _ormpi_state doesn't exist yet.
-    match instance.getattr("_ormpi_state") {
-        Ok(state) => {
-            if let Ok(dict) = state.downcast_into::<PyDict>() {
-                match dict.get_item("adding")? {
-                    Some(v) => v.extract::<bool>(),
-                    None => Ok(true),
-                }
-            } else {
-                Ok(true)
-            }
-        }
-        Err(_) => Ok(true),
+    match instance.getattr("_adding") {
+        Ok(v) => v.extract::<bool>().or(Ok(true)),
+        Err(_) => Ok(true), // conservative default during construction
     }
 }
 
-fn json_to_py(py: Python<'_>, val: serde_json::Value) -> PyObject {
+/// Convert a `serde_json::Value` to `OrmpiValue` so that `refresh_from_db`
+/// uses the same `OrmpiValue → PyObject` conversion path as `row_to_instance`.
+fn json_val_to_ormpi(val: serde_json::Value) -> OrmpiValue {
     match val {
-        serde_json::Value::Null => py.None(),
-        serde_json::Value::Bool(b) => b.into_py(py),
+        serde_json::Value::Null => OrmpiValue::Null,
+        serde_json::Value::Bool(b) => OrmpiValue::Bool(b),
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
-                i.into_py(py)
+                OrmpiValue::Int(i)
             } else if let Some(f) = n.as_f64() {
-                f.into_py(py)
+                OrmpiValue::Float(f)
             } else {
-                n.to_string().into_py(py)
+                OrmpiValue::Text(n.to_string())
             }
         }
-        serde_json::Value::String(s) => s.into_py(py),
-        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
-            val.to_string().into_py(py)
-        }
+        serde_json::Value::String(s) => OrmpiValue::Text(s),
+        other => OrmpiValue::Json(other),
     }
 }

@@ -305,9 +305,9 @@ class TestInstanceSaveUpdate:
     async def test_save_clears_dirty_fields(self):
         a = await make_author()
         a.name = "Dirty"
-        assert "name" in a._ormpi_dirty
+        assert bool(a._dirty & Author._field_bits["name"])
         await a.save()
-        assert "name" not in a._ormpi_dirty
+        assert not (a._dirty & Author._field_bits["name"])
 
     @pytest.mark.asyncio
     async def test_save_to_null_field(self):
@@ -425,7 +425,7 @@ class TestBulkUpdate:
     async def test_updates_all_objects(self):
         objs = await make_authors(3)
         for obj in objs:
-            obj._ormpi_values["bio"] = "updated"
+            obj._values["bio"] = "updated"
         count = await Author.objects.bulk_update(objs, ["bio"])
         assert count == 3
         for r in await Author.objects.all():
@@ -436,8 +436,8 @@ class TestBulkUpdate:
         a = await Author.objects.create(
             name="Alice", email="a@test.com", age=25, bio="keep"
         )
-        a._ormpi_values["name"] = "Changed"
-        a._ormpi_values["age"]  = 99
+        a._values["name"] = "Changed"
+        a._values["age"]  = 99
         await Author.objects.bulk_update([a], ["name"])
         fetched = await Author.objects.get(pk=a.pk)
         assert fetched.name == "Changed"
@@ -448,8 +448,8 @@ class TestBulkUpdate:
     async def test_bulk_update_multiple_fields(self):
         objs = await make_authors(2)
         for obj in objs:
-            obj._ormpi_values["name"] = "Renamed"
-            obj._ormpi_values["age"]  = 77
+            obj._values["name"] = "Renamed"
+            obj._values["age"]  = 77
         await Author.objects.bulk_update(objs, ["name", "age"])
         for r in await Author.objects.all():
             assert r.name == "Renamed"
@@ -458,7 +458,7 @@ class TestBulkUpdate:
     @pytest.mark.asyncio
     async def test_bulk_update_single_object(self):
         a = await make_author()
-        a._ormpi_values["bio"] = "solo"
+        a._values["bio"] = "solo"
         count = await Author.objects.bulk_update([a], ["bio"])
         assert count == 1
         assert (await Author.objects.get(pk=a.pk)).bio == "solo"
@@ -467,7 +467,7 @@ class TestBulkUpdate:
     async def test_bulk_update_with_batch_size(self):
         objs = await make_authors(9)
         for obj in objs:
-            obj._ormpi_values["bio"] = "batched"
+            obj._values["bio"] = "batched"
         count = await Author.objects.bulk_update(objs, ["bio"], batch_size=3)
         assert count == 9
         assert await Author.objects.filter(bio="batched").count() == 9
@@ -477,7 +477,7 @@ class TestBulkUpdate:
         objs = await make_authors(4)
         subset = objs[:2]
         for obj in subset:
-            obj._ormpi_values["bio"] = "partial"
+            obj._values["bio"] = "partial"
         await Author.objects.bulk_update(subset, ["bio"])
         updated = await Author.objects.filter(bio="partial").count()
         assert updated == 2
@@ -490,7 +490,7 @@ class TestBulkUpdate:
         created = await Author.objects.bulk_create(raw)
         all_objs = await Author.objects.all()
         for obj in all_objs:
-            obj._ormpi_values["bio"] = "from bulk"
+            obj._values["bio"] = "from bulk"
         count = await Author.objects.bulk_update(all_objs, ["bio"])
         assert count == 3
 

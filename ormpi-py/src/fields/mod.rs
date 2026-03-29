@@ -66,7 +66,7 @@ macro_rules! impl_field_common {
                 match obj {
                     None => Ok(slf.into_py(py)),
                     Some(instance) => {
-                        let values = instance.getattr("_ormpi_values")?;
+                        let values = instance.getattr("_values")?;
                         if let Ok(dict) =
                             values.downcast_into::<pyo3::types::PyDict>()
                         {
@@ -81,30 +81,41 @@ macro_rules! impl_field_common {
                 }
             }
 
-            /// Descriptor `__set__`: write value into `_ormpi_values` and record
-            /// the field name in `_ormpi_dirty` (only for DB-fetched instances).
+            /// Descriptor `__set__`: write value into `_values` and update
+            /// the `_dirty` bitmask (only for DB-fetched instances).
             fn __set__(
                 &self,
                 instance: pyo3::Bound<'_, pyo3::PyAny>,
                 value: pyo3::Bound<'_, pyo3::PyAny>,
             ) -> pyo3::PyResult<()> {
-                let values = instance.getattr("_ormpi_values")?;
+                let values = instance.getattr("_values")?;
                 if let Ok(dict) = values.downcast_into::<pyo3::types::PyDict>() {
                     dict.set_item(self.inner.name.as_str(), &value)?;
                 }
                 // Only track dirty when loaded from DB (adding=False).
                 // For new (adding=True) instances, save() does a full INSERT anyway.
                 let is_adding: bool = instance
-                    .getattr("_ormpi_state")
+                    .getattr("_adding")
                     .ok()
-                    .and_then(|s| s.downcast_into::<pyo3::types::PyDict>().ok())
-                    .and_then(|d| d.get_item("adding").ok().flatten())
                     .and_then(|v| v.extract::<bool>().ok())
                     .unwrap_or(true);
                 if !is_adding {
-                    instance
-                        .getattr("_ormpi_dirty")?
-                        .call_method1("add", (self.inner.name.as_str(),))?;
+                    let bit: u64 = instance
+                        .get_type()
+                        .getattr("_field_bits")
+                        .ok()
+                        .and_then(|fb| fb.downcast_into::<pyo3::types::PyDict>().ok())
+                        .and_then(|d| d.get_item(self.inner.name.as_str()).ok().flatten())
+                        .and_then(|v| v.extract::<u64>().ok())
+                        .unwrap_or(0);
+                    if bit != 0 {
+                        let current: u64 = instance
+                            .getattr("_dirty")
+                            .ok()
+                            .and_then(|v| v.extract::<u64>().ok())
+                            .unwrap_or(0);
+                        instance.setattr("_dirty", current | bit)?;
+                    }
                 }
                 Ok(())
             }

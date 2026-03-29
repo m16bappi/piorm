@@ -1,5 +1,5 @@
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PySet, PyTuple};
+use pyo3::types::{PyDict, PyList, PyTuple};
 
 use ormpi_core::model::def::OrderSpec;
 use ormpi_core::model::registry::ModelRegistry;
@@ -91,26 +91,22 @@ pub(crate) fn row_to_instance(
     row: &OrmpiRow,
     model_class: &PyObject,
 ) -> PyResult<PyObject> {
-    // Call the class with no args to create a bare instance.
+    // call0() invokes Model.__init__(**{}) which sets up the slots:
+    //   _values = {}, _dirty = 0, _adding = True, _db = None
     let instance = model_class.bind(py).call0()?;
 
-    // Populate _ormpi_values from the row.
+    // ONLY allocation: build the populated _values dict and assign to slot.
     let values = PyDict::new_bound(py);
     for (col_name, ormpi_val) in &row.values {
         let py_val = ormpi_value_to_py(py, ormpi_val);
         values.set_item(col_name, py_val)?;
     }
-    instance.setattr("_ormpi_values", &values)?;
+    instance.setattr("_values", &values)?;
 
-    // Mark as not-adding (came from DB).
-    let state = PyDict::new_bound(py);
-    state.set_item("adding", false)?;
-    state.set_item("db", py.None())?;
-    instance.setattr("_ormpi_state", &state)?;
-
-    // Clear dirty set.
-    let dirty = PySet::empty_bound(py)?;
-    instance.setattr("_ormpi_dirty", &dirty)?;
+    // Flat slot writes — no extra allocations.
+    instance.setattr("_dirty", 0u64)?;
+    instance.setattr("_adding", false)?;
+    instance.setattr("_db", py.None())?;
 
     Ok(instance.into())
 }
@@ -344,7 +340,7 @@ fn attach_prefetch_cache(
 
         // Extract pk value as string key.
         let pk_key = inst_ref
-            .getattr("_ormpi_values")
+            .getattr("_values")
             .ok()
             .and_then(|d| d.get_item("id").ok())
             .and_then(|v| crate::model::instance::py_to_ormpi_value(&v).ok())
@@ -1530,15 +1526,15 @@ impl PyQuerySet {
         let py = slf.py();
         let state = slf.borrow().state.clone();
 
-        // Extract _ormpi_values from each object (must happen while we hold the GIL).
+        // Extract _values from each object (must happen while we hold the GIL).
         let rows: Vec<Vec<(String, ormpi_core::value::OrmpiValue)>> = objs
             .iter()
             .map(|obj| {
                 let bound = obj.bind(py);
-                let values = bound.getattr("_ormpi_values")?;
+                let values = bound.getattr("_values")?;
                 let d = values.downcast::<PyDict>().map_err(|_| {
                     pyo3::exceptions::PyTypeError::new_err(
-                        "bulk_create: each object must have _ormpi_values dict",
+                        "bulk_create: each object must have _values dict",
                     )
                 })?;
                 d.iter()
@@ -1609,16 +1605,16 @@ impl PyQuerySet {
             .iter()
             .map(|obj| {
                 let bound = obj.bind(py);
-                let values_obj = bound.getattr("_ormpi_values")?;
+                let values_obj = bound.getattr("_values")?;
                 let d = values_obj.downcast::<PyDict>().map_err(|_| {
                     pyo3::exceptions::PyTypeError::new_err(
-                        "bulk_update: each object must have _ormpi_values dict",
+                        "bulk_update: each object must have _values dict",
                     )
                 })?;
 
                 let pk_py = d.get_item("id")?.ok_or_else(|| {
                     pyo3::exceptions::PyValueError::new_err(
-                        "bulk_update: object has no 'id' in _ormpi_values",
+                        "bulk_update: object has no 'id' in _values",
                     )
                 })?;
                 let pk_val = crate::model::instance::py_to_ormpi_value(&pk_py)?;

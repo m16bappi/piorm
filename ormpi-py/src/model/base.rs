@@ -247,7 +247,7 @@ impl PyManager {
 /// Accepts arbitrary kwargs in `__new__` so that Python subclasses can be
 /// instantiated with keyword arguments.  The actual initialisation is done by
 /// the Python-level `Model.__init__`.
-#[pyclass(name = "Model", subclass)]
+#[pyclass(name = "Model", subclass, frozen)]
 pub struct PyModel {}
 
 #[pymethods]
@@ -355,30 +355,32 @@ pub fn _register_model_class(cls: Bound<'_, PyType>) -> PyResult<()> {
     }
 
     // Auto-add BigIntegerField `id` (auto_increment) when no explicit PK is declared.
+    // Insert `id` first so it gets bit 0 in _field_bits (stable ordering guarantee).
     if !has_pk {
-        fields.insert(
-            "id".to_string(),
-            FieldDef {
-                name: "id".to_string(),
-                attname: "id".to_string(),
-                db_column: None,
-                field_type: FieldType::BigInt,
-                primary_key: true,
-                null: false,
-                unique: false,
-                db_index: false,
-                editable: false,
-                default: DefaultValue::None,
-                choices: vec![],
-                auto_increment: true,
-                auto_now: false,
-                auto_now_add: false,
-                max_length: None,
-                validators: vec![],
-                verbose_name: Some("ID".to_string()),
-                related_name: None,
-            },
-        );
+        let id_field = FieldDef {
+            name: "id".to_string(),
+            attname: "id".to_string(),
+            db_column: None,
+            field_type: FieldType::BigInt,
+            primary_key: true,
+            null: false,
+            unique: false,
+            db_index: false,
+            editable: false,
+            default: DefaultValue::None,
+            choices: vec![],
+            auto_increment: true,
+            auto_now: false,
+            auto_now_add: false,
+            max_length: None,
+            validators: vec![],
+            verbose_name: Some("ID".to_string()),
+            related_name: None,
+        };
+        let mut ordered = IndexMap::new();
+        ordered.insert("id".to_string(), id_field);
+        ordered.extend(fields);
+        fields = ordered;
     }
 
     // ── Parse Meta options ────────────────────────────────────────────────
@@ -407,10 +409,23 @@ pub fn _register_model_class(cls: Bound<'_, PyType>) -> PyResult<()> {
         default_manager_name: "objects".to_string(),
     };
 
+    // ── Assign _field_bits for bitmask dirty tracking ─────────────────────
+    //
+    // Builds {"field_name": 1 << index} using the canonical field order from
+    // model_def.fields (an IndexMap — insertion-ordered).  This dict is
+    // stored as a ClassVar on the Python class so that __setattr__ in
+    // models.py and extract_dirty in instance.rs can both read it.
+
+    let field_bits_dict = PyDict::new_bound(py);
+    for (i, name) in model_def.fields.keys().enumerate() {
+        field_bits_dict.set_item(name, 1u64 << i)?;
+    }
+
     ModelRegistry::global().write().unwrap().register(model_def);
 
     // ── Expose pk field name so Python's `pk` property can be dynamic ─────
     cls.setattr("_ormpi_pk_field", pk_field_name.as_str())?;
+    cls.setattr("_field_bits", field_bits_dict)?;
 
     // ── Attach `objects` manager ──────────────────────────────────────────
 

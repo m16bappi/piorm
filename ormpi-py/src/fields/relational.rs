@@ -149,8 +149,8 @@ impl PyForeignKey {
                         return Ok(cached.into_py(py));
                     }
                 }
-                // Return the raw FK id value from _ormpi_values
-                let values = instance.getattr("_ormpi_values")?;
+                // Return the raw FK id value from _values
+                let values = instance.getattr("_values")?;
                 if let Ok(dict) = values.downcast_into::<PyDict>() {
                     match dict.get_item(slf.inner.attname.as_str())? {
                         Some(v) => Ok(v.into_py(py)),
@@ -170,7 +170,7 @@ impl PyForeignKey {
         value: Bound<'_, PyAny>,
     ) -> PyResult<()> {
         let py = instance.py();
-        let values = instance.getattr("_ormpi_values")?;
+        let values = instance.getattr("_values")?;
         if let Ok(dict) = values.downcast_into::<PyDict>() {
             if value.is_none() {
                 dict.set_item(self.inner.attname.as_str(), py.None())?;
@@ -187,9 +187,22 @@ impl PyForeignKey {
                 instance.setattr(cache_key.as_str(), &value)?;
             }
         }
-        instance
-            .getattr("_ormpi_dirty")?
-            .call_method1("add", (self.inner.attname.as_str(),))?;
+        let bit: u64 = instance
+            .get_type()
+            .getattr("_field_bits")
+            .ok()
+            .and_then(|fb| fb.downcast_into::<PyDict>().ok())
+            .and_then(|d| d.get_item(self.inner.attname.as_str()).ok().flatten())
+            .and_then(|v| v.extract::<u64>().ok())
+            .unwrap_or(0);
+        if bit != 0 {
+            let current: u64 = instance
+                .getattr("_dirty")
+                .ok()
+                .and_then(|v| v.extract::<u64>().ok())
+                .unwrap_or(0);
+            instance.setattr("_dirty", current | bit)?;
+        }
         Ok(())
     }
 
@@ -325,7 +338,7 @@ impl PyOneToOneField {
         match obj {
             None => Ok(slf.into_py(py)),
             Some(instance) => {
-                let values = instance.getattr("_ormpi_values")?;
+                let values = instance.getattr("_values")?;
                 if let Ok(dict) = values.downcast_into::<PyDict>() {
                     match dict.get_item(slf.inner.attname.as_str())? {
                         Some(v) => Ok(v.into_py(py)),
@@ -344,7 +357,7 @@ impl PyOneToOneField {
         value: Bound<'_, PyAny>,
     ) -> PyResult<()> {
         let py = instance.py();
-        let values = instance.getattr("_ormpi_values")?;
+        let values = instance.getattr("_values")?;
         if let Ok(dict) = values.downcast_into::<PyDict>() {
             if value.is_none() {
                 dict.set_item(self.inner.attname.as_str(), py.None())?;
@@ -354,9 +367,22 @@ impl PyOneToOneField {
                 dict.set_item(self.inner.attname.as_str(), &value)?;
             }
         }
-        instance
-            .getattr("_ormpi_dirty")?
-            .call_method1("add", (self.inner.attname.as_str(),))?;
+        let bit: u64 = instance
+            .get_type()
+            .getattr("_field_bits")
+            .ok()
+            .and_then(|fb| fb.downcast_into::<PyDict>().ok())
+            .and_then(|d| d.get_item(self.inner.attname.as_str()).ok().flatten())
+            .and_then(|v| v.extract::<u64>().ok())
+            .unwrap_or(0);
+        if bit != 0 {
+            let current: u64 = instance
+                .getattr("_dirty")
+                .ok()
+                .and_then(|v| v.extract::<u64>().ok())
+                .unwrap_or(0);
+            instance.setattr("_dirty", current | bit)?;
+        }
         Ok(())
     }
 

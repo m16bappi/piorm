@@ -125,9 +125,9 @@ class TestSaveInsert:
     @pytest.mark.asyncio
     async def test_save_new_sets_adding_false(self):
         a = Author(name="Alice", email="alice@test.com")
-        assert a._ormpi_state["adding"] is True
+        assert a._adding is True
         await a.save()
-        assert a._ormpi_state["adding"] is False
+        assert a._adding is False
 
     @pytest.mark.asyncio
     async def test_save_new_persists_values(self):
@@ -174,9 +174,9 @@ class TestSaveUpdate:
     async def test_save_clears_dirty_set(self):
         a = await make_author()
         a.name = "Dirty"
-        assert "name" in a._ormpi_dirty
+        assert bool(a._dirty & Author._field_bits["name"])
         await a.save()
-        assert len(a._ormpi_dirty) == 0
+        assert a._dirty == 0
 
 
 # ===========================================================================
@@ -440,7 +440,7 @@ class TestBulkUpdate:
             for i in range(3)
         ]
         for obj in objs:
-            obj._ormpi_values["bio"] = "Updated"
+            obj._values["bio"] = "Updated"
         count = await Author.objects.bulk_update(objs, ["bio"])
         assert count == 3
         results = await Author.objects.all()
@@ -453,8 +453,8 @@ class TestBulkUpdate:
             for i in range(2)
         ]
         for obj in objs:
-            obj._ormpi_values["name"] = "Renamed"
-            obj._ormpi_values["age"]  = 99
+            obj._values["name"] = "Renamed"
+            obj._values["age"]  = 99
         await Author.objects.bulk_update(objs, ["name", "age"])
         results = await Author.objects.all()
         assert all(r.name == "Renamed" and r.age == 99 for r in results)
@@ -466,7 +466,7 @@ class TestBulkUpdate:
             for i in range(6)
         ]
         for obj in objs:
-            obj._ormpi_values["bio"] = "Batched"
+            obj._values["bio"] = "Batched"
         count = await Author.objects.bulk_update(objs, ["bio"], batch_size=2)
         assert count == 6
 
@@ -475,7 +475,7 @@ class TestBulkUpdate:
         a = await Author.objects.create(
             name="Original", email="o@test.com", age=25, bio="Keep"
         )
-        a._ormpi_values["name"] = "Changed"
+        a._values["name"] = "Changed"
         await Author.objects.bulk_update([a], ["name"])
         fetched = await Author.objects.get(pk=a.pk)
         assert fetched.name == "Changed"
@@ -491,33 +491,33 @@ class TestDirtyTracking:
     async def test_new_instance_no_dirty(self):
         a = Author(name="Alice", email="alice@test.com")
         # __init__ does setattr which marks dirty
-        assert "name" in a._ormpi_dirty
+        assert bool(a._dirty & Author._field_bits["name"])
 
     @pytest.mark.asyncio
     async def test_after_create_dirty_cleared(self):
         a = await Author.objects.create(name="Alice", email="alice@test.com")
-        assert len(a._ormpi_dirty) == 0
+        assert a._dirty == 0
 
     @pytest.mark.asyncio
     async def test_setattr_marks_dirty(self):
         a = await Author.objects.create(name="Alice", email="alice@test.com")
         a.name = "Changed"
-        assert "name" in a._ormpi_dirty
+        assert bool(a._dirty & Author._field_bits["name"])
 
     @pytest.mark.asyncio
     async def test_save_clears_dirty(self):
         a = await Author.objects.create(name="Alice", email="alice@test.com")
         a.name = "Changed"
         await a.save()
-        assert "name" not in a._ormpi_dirty
+        assert not (a._dirty & Author._field_bits["name"])
 
     @pytest.mark.asyncio
     async def test_multiple_field_changes_tracked(self):
         a = await Author.objects.create(name="Alice", email="alice@test.com")
         a.name = "Bob"
         a.age  = 99
-        assert "name" in a._ormpi_dirty
-        assert "age"  in a._ormpi_dirty
+        assert bool(a._dirty & Author._field_bits["name"])
+        assert bool(a._dirty & Author._field_bits["age"])
 
 
 # ===========================================================================
@@ -528,18 +528,18 @@ class TestInstanceState:
     @pytest.mark.asyncio
     async def test_new_instance_is_adding(self):
         a = Author(name="Alice", email="alice@test.com")
-        assert a._ormpi_state["adding"] is True
+        assert a._adding is True
 
     @pytest.mark.asyncio
     async def test_after_save_not_adding(self):
         a = Author(name="Alice", email="alice@test.com")
         await a.save()
-        assert a._ormpi_state["adding"] is False
+        assert a._adding is False
 
     @pytest.mark.asyncio
     async def test_create_not_adding(self):
         a = await Author.objects.create(name="Alice", email="alice@test.com")
-        assert a._ormpi_state["adding"] is False
+        assert a._adding is False
 
     @pytest.mark.asyncio
     async def test_pk_set_after_save(self):

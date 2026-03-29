@@ -760,7 +760,7 @@ class TestSelectRelated:
 
         articles = await Article.objects.select_related("author")
         assert len(articles) == 1
-        cached = articles[0]._ormpi_values.get("author") or getattr(articles[0], "_ormpi_cache_author", None)
+        cached = articles[0]._values.get("author") or getattr(articles[0], "_ormpi_cache_author", None)
         assert cached is not None
 
     @pytest.mark.asyncio

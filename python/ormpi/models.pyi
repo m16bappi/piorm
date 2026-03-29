@@ -46,9 +46,12 @@ class Model:
     """
 
     # ── Private ORM state ──────────────────────────────────────────────
-    _ormpi_values: dict[str, Any]
-    _ormpi_dirty:  set[str]
-    _ormpi_state:  dict[str, Any]
+    __slots__:   ClassVar[tuple[str, ...]]
+    _field_bits: ClassVar[dict[str, int]]
+    _values:  dict[str, Any]
+    _dirty:   int
+    _adding:  bool
+    _db:      str | None
 
     # ── Class-level attributes ─────────────────────────────────────────
     #
