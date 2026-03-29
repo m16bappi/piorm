@@ -52,6 +52,15 @@ pub(crate) fn py_to_ormpi_value(obj: &Bound<'_, PyAny>) -> PyResult<OrmpiValue> 
     if let Ok(b) = obj.extract::<Vec<u8>>() {
         return Ok(OrmpiValue::Bytes(b));
     }
+    // Model instance passed as FK value — extract pk.
+    if let Ok(pk_attr) = obj.getattr("pk") {
+        if pk_attr.is_none() {
+            return Ok(OrmpiValue::Null);
+        }
+        if let Ok(i) = pk_attr.extract::<i64>() {
+            return Ok(OrmpiValue::Int(i));
+        }
+    }
     // Fall back to a JSON-string representation for complex types.
     let json_str = obj.str()?.extract::<String>()?;
     Ok(OrmpiValue::Text(json_str))

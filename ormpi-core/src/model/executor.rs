@@ -6,8 +6,9 @@ use sqlx::Row;
 use crate::backend::QueryBackend;
 use crate::bind::{mysql_arguments, postgres_arguments, sqlite_arguments};
 use crate::error::OrmpiError;
-use crate::fields::FieldType;
+use crate::fields::{FieldType, OnDelete};
 use crate::model::def::ModelDef;
+use crate::model::registry::ModelRegistry;
 use crate::pool::OrmpiPool;
 use crate::value::OrmpiValue;
 use crate::Result;
@@ -206,7 +207,92 @@ async fn update_instance(
 
 // ── delete_instance ───────────────────────────────────────────────────────────
 
-/// Delete a single model row by its primary key.
+/// Find all (child_model_def, fk_column_attname) pairs that CASCADE-delete
+/// when the given parent model is deleted.
+pub fn find_cascade_children(parent_model_name: &str) -> Vec<(ModelDef, String)> {
+    let reg = ModelRegistry::global();
+    let guard = reg.read().unwrap();
+    let mut children = Vec::new();
+    for child_def in guard.all() {
+        for field in child_def.fields.values() {
+            let (to, on_delete) = match &field.field_type {
+                FieldType::ForeignKey { to, on_delete, .. } => (to.as_str(), on_delete),
+                FieldType::OneToOne { to, on_delete } => (to.as_str(), on_delete),
+                _ => continue,
+            };
+            if to == parent_model_name && matches!(on_delete, OnDelete::Cascade) {
+                children.push((child_def.clone(), field.attname.clone()));
+            }
+        }
+    }
+    children
+}
+
+/// Delete child rows where `fk_col = pk_value` for a single parent PK.
+async fn delete_children_by_pk(
+    pool: &OrmpiPool,
+    backend: &QueryBackend,
+    child_table: &str,
+    fk_col: &str,
+    pk_value: &OrmpiValue,
+) -> Result<usize> {
+    let stmt = Query::delete()
+        .from_table(Alias::new(child_table))
+        .and_where(Expr::col(Alias::new(fk_col)).eq(pk_value.to_sea_value()))
+        .to_owned();
+    let (sql, sea_vals) = backend.build_delete(&stmt);
+    let rows = match pool {
+        OrmpiPool::Sqlite(p) => {
+            sqlx::query_with(&sql, sqlite_arguments(sea_vals))
+                .execute(p).await?.rows_affected() as usize
+        }
+        OrmpiPool::Mysql(p) => {
+            sqlx::query_with(&sql, mysql_arguments(sea_vals))
+                .execute(p).await?.rows_affected() as usize
+        }
+        OrmpiPool::Postgres(p) => {
+            sqlx::query_with(&sql, postgres_arguments(sea_vals))
+                .execute(p).await?.rows_affected() as usize
+        }
+    };
+    Ok(rows)
+}
+
+/// Delete child rows where `fk_col IN (pk_values)` for a batch of parent PKs.
+pub async fn delete_children_by_pk_list(
+    pool: &OrmpiPool,
+    backend: &QueryBackend,
+    child_table: &str,
+    fk_col: &str,
+    pk_values: &[OrmpiValue],
+) -> Result<usize> {
+    if pk_values.is_empty() {
+        return Ok(0);
+    }
+    let sea_vals: Vec<sea_query::Value> = pk_values.iter().map(|v| v.to_sea_value()).collect();
+    let stmt = Query::delete()
+        .from_table(Alias::new(child_table))
+        .and_where(Expr::col(Alias::new(fk_col)).is_in(sea_vals))
+        .to_owned();
+    let (sql, sea_vals) = backend.build_delete(&stmt);
+    let rows = match pool {
+        OrmpiPool::Sqlite(p) => {
+            sqlx::query_with(&sql, sqlite_arguments(sea_vals))
+                .execute(p).await?.rows_affected() as usize
+        }
+        OrmpiPool::Mysql(p) => {
+            sqlx::query_with(&sql, mysql_arguments(sea_vals))
+                .execute(p).await?.rows_affected() as usize
+        }
+        OrmpiPool::Postgres(p) => {
+            sqlx::query_with(&sql, postgres_arguments(sea_vals))
+                .execute(p).await?.rows_affected() as usize
+        }
+    };
+    Ok(rows)
+}
+
+/// Delete a single model row by its primary key, cascading to children.
 ///
 /// Returns `(rows_affected, {ModelName: rows_affected})`.
 pub async fn delete_instance(
@@ -215,8 +301,21 @@ pub async fn delete_instance(
     pk_value: OrmpiValue,
 ) -> Result<(usize, HashMap<String, usize>)> {
     let backend = QueryBackend(pool.backend());
-    let pk_col = Alias::new(&model_def.pk_field);
+    let mut counts: HashMap<String, usize> = HashMap::new();
 
+    // Cascade: delete children first.
+    let children = find_cascade_children(&model_def.model_name);
+    for (child_def, fk_attname) in &children {
+        let deleted = delete_children_by_pk(
+            pool, &backend, &child_def.table_name, fk_attname, &pk_value,
+        ).await?;
+        if deleted > 0 {
+            *counts.entry(child_def.model_name.clone()).or_insert(0) += deleted;
+        }
+    }
+
+    // Delete the parent row.
+    let pk_col = Alias::new(&model_def.pk_field);
     let stmt = Query::delete()
         .from_table(Alias::new(&model_def.table_name))
         .and_where(Expr::col(pk_col).eq(pk_value.to_sea_value()))
@@ -248,8 +347,7 @@ pub async fn delete_instance(
         }
     };
 
-    let mut counts = HashMap::new();
-    counts.insert(model_def.model_name.clone(), rows_affected);
+    *counts.entry(model_def.model_name.clone()).or_insert(0) += rows_affected;
     Ok((rows_affected, counts))
 }
 

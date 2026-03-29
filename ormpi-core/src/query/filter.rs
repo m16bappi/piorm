@@ -124,9 +124,11 @@ pub fn parse_filter_kwarg(
             .join(", "),
     })?;
 
-    // "pk" is always valid; otherwise check attname and column_name.
+    // "pk" is always valid; otherwise check attname, column_name, or FK attr name.
     if *first_field != "pk" {
+        let fk_attname = format!("{}_id", first_field);
         let known = model_def.fields.contains_key(*first_field)
+            || model_def.fields.contains_key(fk_attname.as_str())
             || model_def
                 .fields
                 .values()

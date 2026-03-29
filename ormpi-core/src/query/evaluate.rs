@@ -182,11 +182,7 @@ pub async fn create_row(
     let mut cols = vec![];
     let mut vals: Vec<Expr> = vec![];
     for (field_name, value) in field_values {
-        let col_name = if let Some(f) = model_def.fields.get(field_name.as_str()) {
-            f.column_name()
-        } else {
-            field_name.clone()
-        };
+        let col_name = resolve_column(&[field_name.clone()], model_def);
         cols.push(Alias::new(&col_name));
         vals.push(Expr::val(value.to_sea_value()));
     }
@@ -350,7 +346,7 @@ pub async fn bulk_update(
     }
 }
 
-/// Execute a bulk DELETE from QueryState filters.
+/// Execute a bulk DELETE from QueryState filters, cascading to children.
 /// Returns the number of rows deleted.
 pub async fn bulk_delete(
     state: &QueryState,
@@ -358,6 +354,57 @@ pub async fn bulk_delete(
     backend: &QueryBackend,
     model_def: &ModelDef,
 ) -> Result<u64> {
+    use crate::model::executor::{delete_children_by_pk_list, find_cascade_children};
+    use sqlx::Row as _;
+
+    // If there are CASCADE children, fetch parent PKs first so we can delete children.
+    let cascade_children = find_cascade_children(&model_def.model_name);
+    if !cascade_children.is_empty() {
+        // SELECT pk FROM parent_table WHERE filters...
+        let mut pk_state = state.clone();
+        pk_state.select_fields = crate::query::state::SelectFields::Only(vec![model_def.pk_field.clone()]);
+        pk_state.order_by.clear();
+        pk_state.limit = None;
+        pk_state.offset = None;
+        let pk_stmt = build_select(&pk_state, model_def);
+        let (pk_sql, pk_sea_vals) = backend.build_select(&pk_stmt);
+
+        let pk_values: Vec<OrmpiValue> = match pool {
+            OrmpiPool::Sqlite(p) => {
+                let args = sqlite_arguments(pk_sea_vals);
+                let rows = sqlx::query_with(&pk_sql, args).fetch_all(p).await?;
+                rows.iter().map(|r| {
+                    r.try_get::<i64, _>(0).map(OrmpiValue::Int)
+                        .unwrap_or(OrmpiValue::Null)
+                }).collect()
+            }
+            OrmpiPool::Mysql(p) => {
+                let args = mysql_arguments(pk_sea_vals);
+                let rows = sqlx::query_with(&pk_sql, args).fetch_all(p).await?;
+                rows.iter().map(|r| {
+                    r.try_get::<i64, _>(0).map(OrmpiValue::Int)
+                        .unwrap_or(OrmpiValue::Null)
+                }).collect()
+            }
+            OrmpiPool::Postgres(p) => {
+                let args = postgres_arguments(pk_sea_vals);
+                let rows = sqlx::query_with(&pk_sql, args).fetch_all(p).await?;
+                rows.iter().map(|r| {
+                    r.try_get::<i64, _>(0).map(OrmpiValue::Int)
+                        .unwrap_or(OrmpiValue::Null)
+                }).collect()
+            }
+        };
+
+        // Delete cascade children for all matched parent PKs.
+        for (child_def, fk_attname) in &cascade_children {
+            delete_children_by_pk_list(
+                pool, backend, &child_def.table_name, fk_attname, &pk_values,
+            ).await?;
+        }
+    }
+
+    // Now delete the parent rows.
     let table = Alias::new(&model_def.table_name);
     let mut stmt = Query::delete();
     stmt.from_table(table);
@@ -415,13 +462,7 @@ pub async fn bulk_create_rows(
         let first = &chunk[0];
         let col_names: Vec<String> = first
             .iter()
-            .map(|(k, _)| {
-                if let Some(f) = model_def.fields.get(k.as_str()) {
-                    f.column_name()
-                } else {
-                    k.clone()
-                }
-            })
+            .map(|(k, _)| resolve_column(&[k.clone()], model_def))
             .collect();
 
         let mut stmt = Query::insert();
@@ -471,11 +512,7 @@ pub async fn update_row_by_pk(
     stmt.table(table);
 
     for (field_name, value) in updates {
-        let col_name = if let Some(f) = model_def.fields.get(field_name.as_str()) {
-            f.column_name()
-        } else {
-            field_name.clone()
-        };
+        let col_name = resolve_column(&[field_name.clone()], model_def);
         stmt.value(Alias::new(&col_name), value.to_sea_value());
     }
 
@@ -646,6 +683,11 @@ fn resolve_column(field_path: &[String], model_def: &ModelDef) -> String {
     if let Some(field) = model_def.fields.get(first) {
         return field.column_name();
     }
+    // FK attr name: user wrote "author", field is stored as "author_id".
+    let fk_attname = format!("{}_id", first);
+    if let Some(field) = model_def.fields.get(fk_attname.as_str()) {
+        return field.column_name();
+    }
     for field in model_def.fields.values() {
         if field.column_name() == first {
             return first.to_string();
@@ -679,11 +721,7 @@ pub async fn create_row_in_txn(
     let mut cols = vec![];
     let mut vals: Vec<Expr> = vec![];
     for (field_name, value) in field_values {
-        let col_name = if let Some(f) = model_def.fields.get(field_name.as_str()) {
-            f.column_name()
-        } else {
-            field_name.clone()
-        };
+        let col_name = resolve_column(&[field_name.clone()], model_def);
         cols.push(Alias::new(&col_name));
         vals.push(Expr::val(value.to_sea_value()));
     }

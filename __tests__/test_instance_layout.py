@@ -10,7 +10,7 @@ from ormpi.models import Model
 from ormpi.fields import CharField, IntegerField
 
 
-class Article(Model):
+class LayoutArticle(Model):
     title = CharField(max_length=200)
     views = IntegerField(default=0)
 
@@ -22,7 +22,7 @@ class Article(Model):
 class TestSlots:
     def test_no_dict_on_instance(self):
         """Model instances must not have __dict__ after __slots__ migration."""
-        a = Article()
+        a = LayoutArticle()
         assert not hasattr(a, "__dict__"), (
             "__dict__ present — __slots__ is not active. "
             "Check that PyModel has `frozen` and that models.py declares __slots__."
@@ -33,7 +33,7 @@ class TestSlots:
         assert set(Model.__slots__) == {"_values", "_dirty", "_adding", "_db", "__weakref__"}
 
     def test_field_bits_set_on_class(self):
-        bits = Article._field_bits
+        bits = LayoutArticle._field_bits
         assert "id"    in bits
         assert "title" in bits
         assert "views" in bits
@@ -45,47 +45,47 @@ class TestSlots:
 
     def test_weakref_support(self):
         import weakref
-        a = Article()
+        a = LayoutArticle()
         ref = weakref.ref(a)
         assert ref() is a
 
 
 class TestDirtyTracking:
     def test_clean_after_construction_no_kwargs(self):
-        a = Article()
+        a = LayoutArticle()
         assert a._dirty == 0
 
     def test_dirty_after_kwarg_init(self):
-        a = Article(title="Hello")
-        assert a._dirty & Article._field_bits["title"]
+        a = LayoutArticle(title="Hello")
+        assert a._dirty & LayoutArticle._field_bits["title"]
 
     def test_dirty_after_setattr(self):
-        a = Article()
+        a = LayoutArticle()
         a.title = "New"
-        assert a._dirty & Article._field_bits["title"]
-        assert not (a._dirty & Article._field_bits["views"])
+        assert a._dirty & LayoutArticle._field_bits["title"]
+        assert not (a._dirty & LayoutArticle._field_bits["views"])
 
     def test_multiple_dirty_fields(self):
-        a = Article()
+        a = LayoutArticle()
         a.title = "A"
         a.views = 5
-        expected = Article._field_bits["title"] | Article._field_bits["views"]
+        expected = LayoutArticle._field_bits["title"] | LayoutArticle._field_bits["views"]
         assert a._dirty == expected
 
     def test_dirty_cleared_manually(self):
-        a = Article(title="x")
+        a = LayoutArticle(title="x")
         a._dirty = 0
         assert a._dirty == 0
 
     def test_get_dirty_field_names(self):
-        a = Article(title="x", views=3)
-        dirty_names = {n for n, b in Article._field_bits.items() if a._dirty & b}
+        a = LayoutArticle(title="x", views=3)
+        dirty_names = {n for n, b in LayoutArticle._field_bits.items() if a._dirty & b}
         assert "title" in dirty_names
         assert "views" in dirty_names
 
     def test_slot_writes_do_not_set_dirty(self):
         """Writing to _values/_dirty/_adding/_db must not recurse or set dirty bits."""
-        a = Article()
+        a = LayoutArticle()
         a._dirty = 0b1111
         a._adding = False
         a._db = "replica"
@@ -97,27 +97,27 @@ class TestDirtyTracking:
 
 class TestGetattr:
     def test_field_value_readable_via_attribute(self):
-        a = Article()
+        a = LayoutArticle()
         a._values["title"] = "direct"
         assert a.title == "direct"
 
     def test_missing_field_raises_attribute_error(self):
-        a = Article()
+        a = LayoutArticle()
         with pytest.raises(AttributeError):
             _ = a.nonexistent_field
 
     def test_pk_property(self):
-        a = Article()
+        a = LayoutArticle()
         a._values["id"] = 42
         assert a.pk == 42
 
 
 class TestRepr:
     def test_repr_shows_pk(self):
-        a = Article()
+        a = LayoutArticle()
         a._values["id"] = 7
-        assert repr(a) == "<Article: pk=7>"
+        assert repr(a) == "<LayoutArticle: pk=7>"
 
     def test_repr_unknown_pk(self):
-        a = Article()
-        assert repr(a) == "<Article: pk=?>"
+        a = LayoutArticle()
+        assert repr(a) == "<LayoutArticle: pk=?>"
