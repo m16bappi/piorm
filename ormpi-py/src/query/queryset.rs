@@ -1450,33 +1450,55 @@ impl PyQuerySet {
                 );
             }
 
-            let updates: std::collections::HashMap<String, ormpi_core::value::OrmpiValue> =
-                default_vals.iter().cloned().collect();
-            let rows_affected = bulk_update(&filter_state, &updates, &pool, &backend, &model_def)
-                .await
-                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
-
-            if rows_affected > 0 {
-                // Fetch updated instance.
+            // When no defaults are provided, skip the UPDATE entirely (empty SET is a SQL error).
+            // Instead, do a SELECT to check if the row exists.
+            if default_vals.is_empty() {
                 let mut fetch_state = filter_state.clone();
                 fetch_state.limit = Some(1);
                 let rows = fetch_rows_for_state(&fetch_state)
                     .await
                     .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
-
-                return Python::with_gil(|py| {
-                    let instance = if rows.is_empty() {
-                        py.None()
-                    } else {
-                        match &model_class {
+                if !rows.is_empty() {
+                    return Python::with_gil(|py| {
+                        let instance = match &model_class {
                             Some(cls) => row_to_instance(py, &rows[0], cls)?,
                             None => py.None(),
-                        }
-                    };
-                    let tuple =
-                        pyo3::types::PyTuple::new_bound(py, [instance, false.into_py(py)]);
-                    Ok::<PyObject, PyErr>(tuple.into())
-                });
+                        };
+                        let tuple =
+                            pyo3::types::PyTuple::new_bound(py, [instance, false.into_py(py)]);
+                        Ok::<PyObject, PyErr>(tuple.into())
+                    });
+                }
+                // Row not found — fall through to create.
+            } else {
+                let updates: std::collections::HashMap<String, ormpi_core::value::OrmpiValue> =
+                    default_vals.iter().cloned().collect();
+                let rows_affected = bulk_update(&filter_state, &updates, &pool, &backend, &model_def)
+                    .await
+                    .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+                if rows_affected > 0 {
+                    // Fetch updated instance.
+                    let mut fetch_state = filter_state.clone();
+                    fetch_state.limit = Some(1);
+                    let rows = fetch_rows_for_state(&fetch_state)
+                        .await
+                        .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+
+                    return Python::with_gil(|py| {
+                        let instance = if rows.is_empty() {
+                            py.None()
+                        } else {
+                            match &model_class {
+                                Some(cls) => row_to_instance(py, &rows[0], cls)?,
+                                None => py.None(),
+                            }
+                        };
+                        let tuple =
+                            pyo3::types::PyTuple::new_bound(py, [instance, false.into_py(py)]);
+                        Ok::<PyObject, PyErr>(tuple.into())
+                    });
+                }
             }
 
             // No rows matched — create a new one.

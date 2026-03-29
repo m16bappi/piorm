@@ -61,13 +61,15 @@ pub fn build_select(state: &QueryState, model_def: &ModelDef) -> sea_query::Sele
     }
 
     for order in &state.order_by {
-        let col = Alias::new(&order.field);
+        let field = if order.field == "pk" { model_def.pk_field.as_str() } else { order.field.as_str() };
+        let col = Alias::new(field);
         let dir = if order.descending { Order::Desc } else { Order::Asc };
         stmt.order_by(col, dir);
     }
     if state.order_by.is_empty() {
         for order in &model_def.ordering {
-            let col = Alias::new(&order.field);
+            let field = if order.field == "pk" { model_def.pk_field.as_str() } else { order.field.as_str() };
+            let col = Alias::new(field);
             let dir = if order.descending { Order::Desc } else { Order::Asc };
             stmt.order_by(col, dir);
         }
