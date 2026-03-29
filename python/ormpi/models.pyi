@@ -1,10 +1,9 @@
 # python/ormpi/models.pyi
 # Python 3.12+ stubs for the ormpi Model base class.
 
-from typing import Any, ClassVar, Self, dataclass_transform
-from ormpi._core import Manager, QuerySet
+from typing import Any, ClassVar, Self
+from ormpi._core import Manager
 from ormpi.exceptions import DoesNotExist as _DoesNotExist
-from ormpi.fields import Field
 
 # ── ModelOptions ──────────────────────────────────────────────────────────
 
@@ -17,12 +16,14 @@ class ModelOptions:
     abstract:        bool
 
 # ── Model ─────────────────────────────────────────────────────────────────
-
-@dataclass_transform(
-    eq_default=True,
-    kw_only_default=True,
-    field_specifiers=(Field,),
-)
+#
+# Note: @dataclass_transform is intentionally NOT used here.
+# pyright/Pylance require explicit type annotations (name: str = CharField(...))
+# to synthesize __init__ parameters via @dataclass_transform. Without them,
+# it generates an empty __init__ and reports "No parameter named 'name'".
+# Instead, __init__(self, **kwargs: Any) accepts all field kwargs and lets
+# the descriptor protocol (Field[T].__get__) handle instance attribute typing.
+#
 class Model:
     """Base class for all ormpi models.
 
@@ -97,7 +98,7 @@ class Model:
         using: str = "default",
     ) -> None: ...
 
-    async def delete(self, using: str = "default") -> None: ...
+    async def delete(self, using: str = "default") -> tuple[int, dict[str, int]]: ...
 
     async def refresh_from_db(
         self,

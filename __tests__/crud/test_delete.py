@@ -261,7 +261,7 @@ class TestCascadeDelete:
         await Article.objects.create(title="For A2", author=a2)
         await a1.delete()
         assert await Article.objects.count() == 1
-        assert (await Article.objects.first()).title == "For A2"
+        assert (await Article.objects.first()).title == "For A2" # type: ignore
 
 
 # ===========================================================================

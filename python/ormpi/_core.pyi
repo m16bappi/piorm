@@ -3,7 +3,7 @@
 # Python 3.12+ only — no "from __future__ import annotations".
 
 from typing import Any, LiteralString, Literal, Self, final, overload
-from collections.abc import AsyncIterator, Coroutine, Generator, Iterator
+from collections.abc import AsyncIterator, Coroutine, Generator, Iterator, Sequence
 import datetime
 import decimal
 import uuid
@@ -173,13 +173,13 @@ class QuerySet[M]:
     def aggregate(self, **kwargs: Any) -> Coroutine[Any, Any, dict[str, Any]]: ...
     def bulk_create(
         self,
-        objs: list[M],
+        objs: Sequence[M],
         batch_size: int | None = None,
         ignore_conflicts: bool = False,
     ) -> Coroutine[Any, Any, list[M]]: ...
     def bulk_update(
         self,
-        objs: list[M],
+        objs: Sequence[M],
         fields: list[str],
         batch_size: int | None = None,
     ) -> Coroutine[Any, Any, int]: ...
@@ -197,7 +197,7 @@ class RawQuerySet[M]:
 
 # ── EvaluatedQuerySet ─────────────────────────────────────────────────────
 
-class EvaluatedQuerySet[M](QuerySet[M]):
+class EvaluatedQuerySet[M](QuerySet[M], Sequence[M]):
     """QuerySet with rows fetched from the database and held in an internal cache.
 
     Returned by ``await qs``.  Supports synchronous access patterns identical
@@ -303,13 +303,13 @@ class Manager[M]:
     def aggregate(self, **kwargs: Any) -> Coroutine[Any, Any, dict[str, Any]]: ...
     def bulk_create(
         self,
-        objs: list[M],
+        objs: Sequence[M],
         batch_size: int | None = None,
         ignore_conflicts: bool = False,
     ) -> Coroutine[Any, Any, list[M]]: ...
     def bulk_update(
         self,
-        objs: list[M],
+        objs: Sequence[M],
         fields: list[str],
         batch_size: int | None = None,
     ) -> Coroutine[Any, Any, int]: ...
@@ -367,7 +367,7 @@ class Model:
     async def save(
         self, update_fields: list[str] | None = None, using: str = "default"
     ) -> None: ...
-    async def delete(self, using: str = "default") -> None: ...
+    async def delete(self, using: str = "default") -> tuple[int, dict[str, int]]: ...
     async def refresh_from_db(
         self, fields: list[str] | None = None, using: str = "default"
     ) -> None: ...
