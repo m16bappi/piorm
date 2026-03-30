@@ -19,7 +19,11 @@ pub struct PyManager {
 
 impl PyManager {
     pub fn new(app_label: String, model_name: String, model_class: PyObject) -> Self {
-        Self { app_label, model_name, model_class }
+        Self {
+            app_label,
+            model_name,
+            model_class,
+        }
     }
 }
 
@@ -61,7 +65,9 @@ impl PyManager {
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<PyObject> {
         let qs = self.get_queryset(py)?;
-        qs.bind(py).call_method("filter", args, kwargs).map(|r| r.into())
+        qs.bind(py)
+            .call_method("filter", args, kwargs)
+            .map(|r| r.into())
     }
 
     #[pyo3(signature = (*args, **kwargs))]
@@ -72,7 +78,9 @@ impl PyManager {
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<PyObject> {
         let qs = self.get_queryset(py)?;
-        qs.bind(py).call_method("exclude", args, kwargs).map(|r| r.into())
+        qs.bind(py)
+            .call_method("exclude", args, kwargs)
+            .map(|r| r.into())
     }
 
     #[pyo3(signature = (*args, **kwargs))]
@@ -83,23 +91,26 @@ impl PyManager {
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<PyObject> {
         let qs = self.get_queryset(py)?;
-        qs.bind(py).call_method("get", args, kwargs).map(|r| r.into())
+        qs.bind(py)
+            .call_method("get", args, kwargs)
+            .map(|r| r.into())
     }
 
     #[pyo3(signature = (**kwargs))]
     fn create(&self, py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<PyObject> {
         let qs = self.get_queryset(py)?;
-        qs.bind(py).call_method("create", (), kwargs).map(|r| r.into())
+        qs.bind(py)
+            .call_method("create", (), kwargs)
+            .map(|r| r.into())
     }
 
     #[pyo3(signature = (*fields))]
     fn order_by(&self, py: Python<'_>, fields: Vec<String>) -> PyResult<PyObject> {
         let qs = self.get_queryset(py)?;
-        let args = pyo3::types::PyTuple::new_bound(
-            py,
-            fields.iter().map(|f| f.into_py(py)),
-        );
-        qs.bind(py).call_method("order_by", &args, None).map(|r| r.into())
+        let args = pyo3::types::PyTuple::new_bound(py, fields.iter().map(|f| f.into_py(py)));
+        qs.bind(py)
+            .call_method("order_by", &args, None)
+            .map(|r| r.into())
     }
 
     fn distinct(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -109,12 +120,9 @@ impl PyManager {
 
     fn using(&self, py: Python<'_>, alias: String) -> PyResult<PyObject> {
         let qs = self.get_queryset(py)?;
-        qs.bind(py).call_method1("using", (alias,)).map(|r| r.into())
-    }
-
-    fn using_transaction(&self, py: Python<'_>, txn: PyObject) -> PyResult<PyObject> {
-        let qs = self.get_queryset(py)?;
-        qs.bind(py).call_method1("using_transaction", (txn,)).map(|r| r.into())
+        qs.bind(py)
+            .call_method1("using", (alias,))
+            .map(|r| r.into())
     }
 
     fn none(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -146,37 +154,49 @@ impl PyManager {
     fn only(&self, py: Python<'_>, fields: Vec<String>) -> PyResult<PyObject> {
         let qs = self.get_queryset(py)?;
         let py_fields = pyo3::types::PyTuple::new_bound(py, fields.iter().map(|s| s.as_str()));
-        qs.bind(py).call_method1("only", &py_fields).map(|r| r.into())
+        qs.bind(py)
+            .call_method1("only", &py_fields)
+            .map(|r| r.into())
     }
 
     #[pyo3(signature = (*fields))]
     fn defer(&self, py: Python<'_>, fields: Vec<String>) -> PyResult<PyObject> {
         let qs = self.get_queryset(py)?;
         let py_fields = pyo3::types::PyTuple::new_bound(py, fields.iter().map(|s| s.as_str()));
-        qs.bind(py).call_method1("defer", &py_fields).map(|r| r.into())
+        qs.bind(py)
+            .call_method1("defer", &py_fields)
+            .map(|r| r.into())
     }
 
     fn earliest(&self, py: Python<'_>, field: String) -> PyResult<PyObject> {
         let qs = self.get_queryset(py)?;
-        qs.bind(py).call_method1("earliest", (field,)).map(|r| r.into())
+        qs.bind(py)
+            .call_method1("earliest", (field,))
+            .map(|r| r.into())
     }
 
     fn latest(&self, py: Python<'_>, field: String) -> PyResult<PyObject> {
         let qs = self.get_queryset(py)?;
-        qs.bind(py).call_method1("latest", (field,)).map(|r| r.into())
+        qs.bind(py)
+            .call_method1("latest", (field,))
+            .map(|r| r.into())
     }
 
     #[pyo3(signature = (sql, params = None))]
     fn raw(&self, py: Python<'_>, sql: String, params: Option<PyObject>) -> PyResult<PyObject> {
         let qs = self.get_queryset(py)?;
-        qs.bind(py).call_method1("raw", (sql, params)).map(|r| r.into())
+        qs.bind(py)
+            .call_method1("raw", (sql, params))
+            .map(|r| r.into())
     }
 
     #[pyo3(signature = (*fields))]
     fn values(&self, py: Python<'_>, fields: Vec<String>) -> PyResult<PyObject> {
         let qs = self.get_queryset(py)?;
         let py_fields = pyo3::types::PyTuple::new_bound(py, fields.iter().map(|s| s.as_str()));
-        qs.bind(py).call_method1("values", &py_fields).map(|r| r.into())
+        qs.bind(py)
+            .call_method1("values", &py_fields)
+            .map(|r| r.into())
     }
 
     #[pyo3(signature = (*fields, flat = false))]
@@ -185,27 +205,25 @@ impl PyManager {
         let kwargs = pyo3::types::PyDict::new_bound(py);
         kwargs.set_item("flat", flat)?;
         let py_fields = pyo3::types::PyTuple::new_bound(py, fields.iter().map(|s| s.as_str()));
-        qs.bind(py).call_method("values_list", py_fields, Some(&kwargs)).map(|r| r.into())
+        qs.bind(py)
+            .call_method("values_list", py_fields, Some(&kwargs))
+            .map(|r| r.into())
     }
 
     #[pyo3(signature = (**kwargs))]
-    fn aggregate(
-        &self,
-        py: Python<'_>,
-        kwargs: Option<&Bound<'_, PyDict>>,
-    ) -> PyResult<PyObject> {
+    fn aggregate(&self, py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<PyObject> {
         let qs = self.get_queryset(py)?;
-        qs.bind(py).call_method("aggregate", (), kwargs).map(|r| r.into())
+        qs.bind(py)
+            .call_method("aggregate", (), kwargs)
+            .map(|r| r.into())
     }
 
     #[pyo3(signature = (**kwargs))]
-    fn annotate(
-        &self,
-        py: Python<'_>,
-        kwargs: Option<&Bound<'_, PyDict>>,
-    ) -> PyResult<PyObject> {
+    fn annotate(&self, py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<PyObject> {
         let qs = self.get_queryset(py)?;
-        qs.bind(py).call_method("annotate", (), kwargs).map(|r| r.into())
+        qs.bind(py)
+            .call_method("annotate", (), kwargs)
+            .map(|r| r.into())
     }
 
     #[pyo3(signature = (defaults = None, **kwargs))]
@@ -237,21 +255,19 @@ impl PyManager {
     #[pyo3(signature = (*fields))]
     fn select_related(&self, py: Python<'_>, fields: Vec<String>) -> PyResult<PyObject> {
         let qs = self.get_queryset(py)?;
-        let args = pyo3::types::PyTuple::new_bound(
-            py,
-            fields.iter().map(|f| f.into_py(py)),
-        );
-        qs.bind(py).call_method("select_related", &args, None).map(|r| r.into())
+        let args = pyo3::types::PyTuple::new_bound(py, fields.iter().map(|f| f.into_py(py)));
+        qs.bind(py)
+            .call_method("select_related", &args, None)
+            .map(|r| r.into())
     }
 
     #[pyo3(signature = (*fields))]
     fn prefetch_related(&self, py: Python<'_>, fields: Vec<String>) -> PyResult<PyObject> {
         let qs = self.get_queryset(py)?;
-        let args = pyo3::types::PyTuple::new_bound(
-            py,
-            fields.iter().map(|f| f.into_py(py)),
-        );
-        qs.bind(py).call_method("prefetch_related", &args, None).map(|r| r.into())
+        let args = pyo3::types::PyTuple::new_bound(py, fields.iter().map(|f| f.into_py(py)));
+        qs.bind(py)
+            .call_method("prefetch_related", &args, None)
+            .map(|r| r.into())
     }
 
     #[pyo3(signature = (objs, batch_size = None, ignore_conflicts = false))]
@@ -311,7 +327,13 @@ impl PyModel {
         force_update: bool,
         update_fields: Option<Vec<String>>,
     ) -> PyResult<PyObject> {
-        super::instance::save(slf.into_any(), using, force_insert, force_update, update_fields)
+        super::instance::save(
+            slf.into_any(),
+            using,
+            force_insert,
+            force_update,
+            update_fields,
+        )
     }
 
     /// Async — DELETE this model instance from the database.
@@ -430,8 +452,7 @@ pub fn _register_model_class(cls: Bound<'_, PyType>) -> PyResult<()> {
     // ── Parse Meta options ────────────────────────────────────────────────
 
     let (app_label, db_table, ordering) = parse_meta(&cls)?;
-    let table_name =
-        db_table.unwrap_or_else(|| ModelDef::default_table_name(&class_name));
+    let table_name = db_table.unwrap_or_else(|| ModelDef::default_table_name(&class_name));
 
     // ── Build and register ModelDef ───────────────────────────────────────
 
@@ -541,9 +562,9 @@ fn build_m2m_def(field_def: &FieldDef, from_model: &str) -> PyResult<M2MFieldDef
         db_table,
     } = &field_def.field_type
     {
-        let junction_table = db_table.clone().unwrap_or_else(|| {
-            format!("{}_{}", from_model.to_lowercase(), field_def.name)
-        });
+        let junction_table = db_table
+            .clone()
+            .unwrap_or_else(|| format!("{}_{}", from_model.to_lowercase(), field_def.name));
         Ok(M2MFieldDef {
             field_name: field_def.name.clone(),
             to_model: to.clone(),

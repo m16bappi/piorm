@@ -6,7 +6,6 @@ Canonical import patterns:
     from ormpi import configure, close, Model
     from ormpi.fields import CharField, IntegerField, ForeignKey, CASCADE
     from ormpi.expr import Q, F, Count, Sum
-    from ormpi.transaction import atomic, begin, Transaction
     from ormpi.db import connections
     from ormpi.exceptions import DoesNotExist, ValidationError
 """
@@ -19,7 +18,6 @@ import ormpi.db as db
 import ormpi.exceptions as exceptions
 import ormpi.expr as expr
 import ormpi.fields as fields
-import ormpi.transaction as transaction
 from ormpi.db import configure
 
 # ── Model ─────────────────────────────────────────────────────────────────
@@ -46,7 +44,6 @@ __all__ = [
     # sub-modules
     "fields",
     "expr",
-    "transaction",
     "db",
     "exceptions",
 ]
