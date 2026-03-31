@@ -151,30 +151,7 @@ fn configure(
 
                 for model_def in &all_defs {
                     let ddl = ormpi_core::model::ddl::model_to_ddl(model_def, backend);
-
-                    ormpi_core::executor::execute_sql(&pool, &ddl.create_table)
-                        .await
-                        .map_err(ormpi_err)?;
-
-                    for sql in &ddl.create_indexes {
-                        ormpi_core::executor::execute_sql(&pool, sql)
-                            .await
-                            .map_err(ormpi_err)?;
-                    }
-
-                    for sql in &ddl.create_m2m_tables {
-                        ormpi_core::executor::execute_sql(&pool, sql)
-                            .await
-                            .map_err(ormpi_err)?;
-                    }
-
-                    for sql in &ddl.create_fk_constraints {
-                        if !sql.starts_with("--") {
-                            ormpi_core::executor::execute_sql(&pool, sql)
-                                .await
-                                .map_err(ormpi_err)?;
-                        }
-                    }
+                    apply_ddl_for_model(&pool, &ddl).await?;
                 }
             }
         }
@@ -287,6 +264,39 @@ fn run_cli(args: Vec<String>) -> PyResult<i32> {
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
 }
 
+/// Execute all DDL statements for a single model against the given pool.
+/// Skips FK constraint statements that start with `--` (SQLite comments).
+async fn apply_ddl_for_model(
+    pool: &ormpi_core::pool::OrmpiPool,
+    ddl: &ormpi_core::model::ddl::DdlStatements,
+) -> PyResult<()> {
+    ormpi_core::executor::execute_sql(pool, &ddl.create_table)
+        .await
+        .map_err(ormpi_err)?;
+
+    for sql in &ddl.create_indexes {
+        ormpi_core::executor::execute_sql(pool, sql)
+            .await
+            .map_err(ormpi_err)?;
+    }
+
+    for sql in &ddl.create_m2m_tables {
+        ormpi_core::executor::execute_sql(pool, sql)
+            .await
+            .map_err(ormpi_err)?;
+    }
+
+    for sql in &ddl.create_fk_constraints {
+        if !sql.starts_with("--") {
+            ormpi_core::executor::execute_sql(pool, sql)
+                .await
+                .map_err(ormpi_err)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// create_table(model_key, alias="default") -> Awaitable[None]
 ///
 /// Generate DDL for the named model and execute it against the configured
@@ -320,34 +330,7 @@ fn create_table(py: Python<'_>, model_key: String, alias: &str) -> PyResult<PyOb
         let pool = Python::with_gil(|_| get_pool_for_alias(&alias))?;
         let backend = ormpi_core::backend::QueryBackend(pool.backend());
         let ddl = ormpi_core::model::ddl::model_to_ddl(&model_def, backend);
-
-        // Execute CREATE TABLE
-        ormpi_core::executor::execute_sql(&pool, &ddl.create_table)
-            .await
-            .map_err(ormpi_err)?;
-
-        // Execute CREATE INDEX statements
-        for sql in &ddl.create_indexes {
-            ormpi_core::executor::execute_sql(&pool, sql)
-                .await
-                .map_err(ormpi_err)?;
-        }
-
-        // Execute M2M junction table statements
-        for sql in &ddl.create_m2m_tables {
-            ormpi_core::executor::execute_sql(&pool, sql)
-                .await
-                .map_err(ormpi_err)?;
-        }
-
-        // FK constraints (skip SQLite comments)
-        for sql in &ddl.create_fk_constraints {
-            if !sql.starts_with("--") {
-                ormpi_core::executor::execute_sql(&pool, sql)
-                    .await
-                    .map_err(ormpi_err)?;
-            }
-        }
+        apply_ddl_for_model(&pool, &ddl).await?;
 
         Python::with_gil(|py| Ok(py.None()))
     };
@@ -375,30 +358,7 @@ fn create_all_tables(py: Python<'_>, alias: &str) -> PyResult<PyObject> {
 
         for model_def in &all_defs {
             let ddl = ormpi_core::model::ddl::model_to_ddl(model_def, backend);
-
-            ormpi_core::executor::execute_sql(&pool, &ddl.create_table)
-                .await
-                .map_err(ormpi_err)?;
-
-            for sql in &ddl.create_indexes {
-                ormpi_core::executor::execute_sql(&pool, sql)
-                    .await
-                    .map_err(ormpi_err)?;
-            }
-
-            for sql in &ddl.create_m2m_tables {
-                ormpi_core::executor::execute_sql(&pool, sql)
-                    .await
-                    .map_err(ormpi_err)?;
-            }
-
-            for sql in &ddl.create_fk_constraints {
-                if !sql.starts_with("--") {
-                    ormpi_core::executor::execute_sql(&pool, sql)
-                        .await
-                        .map_err(ormpi_err)?;
-                }
-            }
+            apply_ddl_for_model(&pool, &ddl).await?;
         }
 
         Python::with_gil(|py| Ok(py.None()))
