@@ -38,10 +38,6 @@ pub enum OrmpiError {
     #[error("Validation error: {0}")]
     ValidationError(String),
 
-    // Transaction errors
-    #[error("Transaction error: {0}")]
-    TransactionError(String),
-
     // Migration errors
     #[error("Migration error: {0}")]
     MigrationError(String),

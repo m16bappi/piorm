@@ -41,73 +41,67 @@ pub enum PlaceholderStyle {
     Numbered,     // $1, $2, $3 (Postgres)
 }
 
+// ── Internal dispatch macros ─────────────────────────────────────────────────
+
+/// Dispatch a sea-query DML/DQL statement builder to the correct dialect.
+/// Returns `(String, Values)`.
+macro_rules! build_query_stmt {
+    ($backend:expr, $stmt:expr) => {
+        match $backend {
+            DatabaseBackend::Sqlite   => $stmt.build(SqliteQueryBuilder),
+            DatabaseBackend::Mysql    => $stmt.build(MysqlQueryBuilder),
+            DatabaseBackend::Postgres => $stmt.build(PostgresQueryBuilder),
+        }
+    };
+}
+
+/// Dispatch a sea-query DDL statement builder to the correct dialect.
+/// Returns `String`.
+macro_rules! build_ddl_stmt {
+    ($backend:expr, $stmt:expr) => {
+        match $backend {
+            DatabaseBackend::Sqlite   => $stmt.to_string(SqliteQueryBuilder),
+            DatabaseBackend::Mysql    => $stmt.to_string(MysqlQueryBuilder),
+            DatabaseBackend::Postgres => $stmt.to_string(PostgresQueryBuilder),
+        }
+    };
+}
+
 /// Wraps sea-query builders to provide a unified interface.
 #[derive(Debug, Clone, Copy)]
 pub struct QueryBackend(pub DatabaseBackend);
 
 impl QueryBackend {
     pub fn build_select(&self, stmt: &SelectStatement) -> (String, Values) {
-        match self.0 {
-            DatabaseBackend::Sqlite => stmt.build(SqliteQueryBuilder),
-            DatabaseBackend::Mysql => stmt.build(MysqlQueryBuilder),
-            DatabaseBackend::Postgres => stmt.build(PostgresQueryBuilder),
-        }
+        build_query_stmt!(self.0, stmt)
     }
 
     pub fn build_insert(&self, stmt: &InsertStatement) -> (String, Values) {
-        match self.0 {
-            DatabaseBackend::Sqlite => stmt.build(SqliteQueryBuilder),
-            DatabaseBackend::Mysql => stmt.build(MysqlQueryBuilder),
-            DatabaseBackend::Postgres => stmt.build(PostgresQueryBuilder),
-        }
+        build_query_stmt!(self.0, stmt)
     }
 
     pub fn build_update(&self, stmt: &UpdateStatement) -> (String, Values) {
-        match self.0 {
-            DatabaseBackend::Sqlite => stmt.build(SqliteQueryBuilder),
-            DatabaseBackend::Mysql => stmt.build(MysqlQueryBuilder),
-            DatabaseBackend::Postgres => stmt.build(PostgresQueryBuilder),
-        }
+        build_query_stmt!(self.0, stmt)
     }
 
     pub fn build_delete(&self, stmt: &DeleteStatement) -> (String, Values) {
-        match self.0 {
-            DatabaseBackend::Sqlite => stmt.build(SqliteQueryBuilder),
-            DatabaseBackend::Mysql => stmt.build(MysqlQueryBuilder),
-            DatabaseBackend::Postgres => stmt.build(PostgresQueryBuilder),
-        }
+        build_query_stmt!(self.0, stmt)
     }
 
     pub fn build_table_create(&self, stmt: &TableCreateStatement) -> String {
-        match self.0 {
-            DatabaseBackend::Sqlite => stmt.to_string(SqliteQueryBuilder),
-            DatabaseBackend::Mysql => stmt.to_string(MysqlQueryBuilder),
-            DatabaseBackend::Postgres => stmt.to_string(PostgresQueryBuilder),
-        }
+        build_ddl_stmt!(self.0, stmt)
     }
 
     pub fn build_table_alter(&self, stmt: &TableAlterStatement) -> String {
-        match self.0 {
-            DatabaseBackend::Sqlite => stmt.to_string(SqliteQueryBuilder),
-            DatabaseBackend::Mysql => stmt.to_string(MysqlQueryBuilder),
-            DatabaseBackend::Postgres => stmt.to_string(PostgresQueryBuilder),
-        }
+        build_ddl_stmt!(self.0, stmt)
     }
 
     pub fn build_table_drop(&self, stmt: &TableDropStatement) -> String {
-        match self.0 {
-            DatabaseBackend::Sqlite => stmt.to_string(SqliteQueryBuilder),
-            DatabaseBackend::Mysql => stmt.to_string(MysqlQueryBuilder),
-            DatabaseBackend::Postgres => stmt.to_string(PostgresQueryBuilder),
-        }
+        build_ddl_stmt!(self.0, stmt)
     }
 
     pub fn build_index_create(&self, stmt: &IndexCreateStatement) -> String {
-        match self.0 {
-            DatabaseBackend::Sqlite => stmt.to_string(SqliteQueryBuilder),
-            DatabaseBackend::Mysql => stmt.to_string(MysqlQueryBuilder),
-            DatabaseBackend::Postgres => stmt.to_string(PostgresQueryBuilder),
-        }
+        build_ddl_stmt!(self.0, stmt)
     }
 }
 

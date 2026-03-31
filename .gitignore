@@ -26,6 +26,11 @@ share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+*.so
+*.dylib
+*.dll
+*.pdb
+*.pyd
 MANIFEST
 
 # reference:

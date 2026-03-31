@@ -11,7 +11,6 @@ __all__ = [
     "OperationalError",
     "ValidationError",
     "FieldError",
-    "TransactionError",
     "MigrationError",
     "DoesNotExist",
     "MultipleObjectsReturned",
@@ -46,10 +45,6 @@ class ValidationError(OrmpiError):
 
 class FieldError(OrmpiError):
     """An invalid field name or lookup was used."""
-
-
-class TransactionError(OrmpiError):
-    """A transaction operation failed (e.g., commit on a closed transaction)."""
 
 
 class MigrationError(OrmpiError):

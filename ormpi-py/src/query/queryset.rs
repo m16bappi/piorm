@@ -27,11 +27,6 @@ fn clone_model_class(py: Python<'_>, mc: &Option<PyObject>) -> Option<PyObject> 
     mc.as_ref().map(|obj| obj.clone_ref(py))
 }
 
-/// Arc to a transaction — cloneable so it can be stored in QuerySet state.
-type TxnArc = std::sync::Arc<
-    tokio::sync::Mutex<Option<ormpi_core::transaction::OrmpiTransaction>>,
->;
-
 /// Async iterable returned by `QuerySet.raw()` / `Manager.raw()`.
 #[pyclass(name = "RawQuerySet")]
 pub struct PyRawQuerySet {
@@ -99,13 +94,10 @@ impl PyRawQuerySet {
     }
 }
 
-/// Python-facing QuerySet — accumulates query state, evaluates lazily.
 #[pyclass(name = "QuerySet")]
 pub struct PyQuerySet {
     pub state: QueryState,
     pub model_class: Option<PyObject>,
-    /// Optional active transaction; set by `using_transaction(txn)`.
-    pub transaction_arc: Option<TxnArc>,
 }
 
 impl PyQuerySet {
@@ -113,7 +105,6 @@ impl PyQuerySet {
         Self {
             state: QueryState::new(app_label, model_name),
             model_class: None,
-            transaction_arc: None,
         }
     }
 
@@ -121,7 +112,6 @@ impl PyQuerySet {
         Self {
             state: QueryState::new(app_label, model_name),
             model_class: Some(model_class),
-            transaction_arc: None,
         }
     }
 }
@@ -168,7 +158,7 @@ pub(crate) fn row_to_instance(
     // ONLY allocation: build the populated _values dict and assign to slot.
     let values = PyDict::new_bound(py);
     for (col_name, ormpi_val) in &row.values {
-        let py_val = ormpi_value_to_py(py, ormpi_val);
+        let py_val = crate::convert::value_to_py(py,ormpi_val);
         values.set_item(col_name, py_val)?;
     }
     instance.setattr("_values", &values)?;
@@ -179,29 +169,6 @@ pub(crate) fn row_to_instance(
     instance.setattr("_db", py.None())?;
 
     Ok(instance.into())
-}
-
-pub(crate) fn ormpi_value_to_py(py: Python<'_>, value: &OrmpiValue) -> PyObject {
-    match value {
-        OrmpiValue::Null => py.None(),
-        OrmpiValue::Bool(b) => b.into_py(py),
-        OrmpiValue::Int(i) => i.into_py(py),
-        OrmpiValue::Float(f) => f.into_py(py),
-        OrmpiValue::Text(s) => s.into_py(py),
-        OrmpiValue::Bytes(b) => b.clone().into_py(py),
-        OrmpiValue::Uuid(u) => u.to_string().into_py(py),
-        OrmpiValue::Json(j) => j.to_string().into_py(py),
-        OrmpiValue::Decimal(d) => d.to_string().into_py(py),
-        OrmpiValue::Date(d) => d.to_string().into_py(py),
-        OrmpiValue::Time(t) => t.to_string().into_py(py),
-        OrmpiValue::DateTime(dt) => dt.to_string().into_py(py),
-        OrmpiValue::DateTimeTz(dt) => dt.to_string().into_py(py),
-        OrmpiValue::List(items) => {
-            let py_list: Vec<PyObject> = items.iter().map(|v| ormpi_value_to_py(py, v)).collect();
-            py_list.into_py(py)
-        }
-        OrmpiValue::FExpr(_) => py.None(),
-    }
 }
 
 // ── Helper: build result list from rows ──────────────────────────────────────
@@ -219,7 +186,7 @@ fn rows_to_py(
                 .map(|row| {
                     let d = PyDict::new_bound(py);
                     for (k, v) in &row.values {
-                        d.set_item(k, ormpi_value_to_py(py, v))?;
+                        d.set_item(k, crate::convert::value_to_py(py,v))?;
                     }
                     Ok(d.into())
                 })
@@ -231,11 +198,11 @@ fn rows_to_py(
                 .iter()
                 .map(|row| {
                     let vals: Vec<PyObject> = if fields.is_empty() {
-                        row.values.values().map(|v| ormpi_value_to_py(py, v)).collect()
+                        row.values.values().map(|v| crate::convert::value_to_py(py,v)).collect()
                     } else {
                         fields
                             .iter()
-                            .map(|f| ormpi_value_to_py(py, row.values.get(f).unwrap_or(&OrmpiValue::Null)))
+                            .map(|f| crate::convert::value_to_py(py,row.values.get(f).unwrap_or(&OrmpiValue::Null)))
                             .collect()
                     };
                     pyo3::types::PyTuple::new_bound(py, vals).into()
@@ -246,7 +213,7 @@ fn rows_to_py(
         ResultType::FlatList(field) => {
             let items: Vec<PyObject> = rows
                 .iter()
-                .map(|row| ormpi_value_to_py(py, row.values.get(field).unwrap_or(&OrmpiValue::Null)))
+                .map(|row| crate::convert::value_to_py(py,row.values.get(field).unwrap_or(&OrmpiValue::Null)))
                 .collect();
             Ok(PyList::new_bound(py, items).into())
         }
@@ -315,7 +282,7 @@ fn hydrate_with_select_related(
                 let rel_dict = PyDict::new_bound(py);
                 let mut all_null = true;
                 for (k, v) in cols {
-                    let py_val = ormpi_value_to_py(py, v);
+                    let py_val = crate::convert::value_to_py(py,v);
                     if !py_val.is_none(py) {
                         all_null = false;
                     }
@@ -452,7 +419,7 @@ fn attach_prefetch_cache(
             .map(|row| {
                 let d = PyDict::new_bound(py);
                 for (k, v) in &row.values {
-                    d.set_item(k, ormpi_value_to_py(py, v))?;
+                    d.set_item(k, crate::convert::value_to_py(py,v))?;
                 }
                 Ok(d.into())
             })
@@ -475,7 +442,6 @@ impl PyQuerySet {
         let new_qs = PyQuerySet {
             state: slf.borrow().state.clone(),
             model_class,
-            transaction_arc: slf.borrow().transaction_arc.clone(),
         };
         Ok(Py::new(py, new_qs)?.into_py(py))
     }
@@ -491,7 +457,7 @@ impl PyQuerySet {
             lookup: ormpi_core::query::filter::Lookup::IsNull,
             value: ormpi_core::value::OrmpiValue::Bool(true),
         });
-        Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc: slf.borrow().transaction_arc.clone() })?.into_py(py))
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
     }
 
     /// Add WHERE conditions — positional Q objects and/or keyword lookups.
@@ -540,7 +506,7 @@ impl PyQuerySet {
             }
         }
 
-        Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc: slf.borrow().transaction_arc.clone() })?.into_py(py))
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
     }
 
     /// Add negated WHERE conditions.
@@ -587,7 +553,7 @@ impl PyQuerySet {
             }
         }
 
-        Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc: slf.borrow().transaction_arc.clone() })?.into_py(py))
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
     }
 
     /// Set ORDER BY.  Prefix with "-" for descending.  Accepts variadic string args.
@@ -597,7 +563,7 @@ impl PyQuerySet {
         let mut state = slf.borrow().state.clone();
         let model_class = clone_model_class(py, &slf.borrow().model_class);
         state.order_by = fields.iter().map(|s| parse_order_spec(s)).collect();
-        Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc: slf.borrow().transaction_arc.clone() })?.into_py(py))
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
     }
 
     /// Enable SELECT DISTINCT.
@@ -606,7 +572,7 @@ impl PyQuerySet {
         let mut state = slf.borrow().state.clone();
         let model_class = clone_model_class(py, &slf.borrow().model_class);
         state.distinct = true;
-        Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc: slf.borrow().transaction_arc.clone() })?.into_py(py))
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
     }
 
     /// Override the database alias for this query.
@@ -615,19 +581,7 @@ impl PyQuerySet {
         let mut state = slf.borrow().state.clone();
         let model_class = clone_model_class(py, &slf.borrow().model_class);
         state.database = Some(alias);
-        Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc: slf.borrow().transaction_arc.clone() })?.into_py(py))
-    }
-
-    /// Bind this queryset to an active transaction so all operations use its connection.
-    fn using_transaction(
-        slf: Bound<'_, Self>,
-        txn: &crate::transaction::PyTransaction,
-    ) -> PyResult<PyObject> {
-        let py = slf.py();
-        let state = slf.borrow().state.clone();
-        let model_class = clone_model_class(py, &slf.borrow().model_class);
-        let transaction_arc = Some(txn.inner_arc());
-        Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc })?.into_py(py))
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
     }
 
     /// Restrict columns to `fields` only.
@@ -637,7 +591,7 @@ impl PyQuerySet {
         let mut state = slf.borrow().state.clone();
         let model_class = clone_model_class(py, &slf.borrow().model_class);
         state.select_fields = SelectFields::Only(fields);
-        Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc: slf.borrow().transaction_arc.clone() })?.into_py(py))
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
     }
 
     /// Defer loading of the specified columns.
@@ -647,7 +601,7 @@ impl PyQuerySet {
         let mut state = slf.borrow().state.clone();
         let model_class = clone_model_class(py, &slf.borrow().model_class);
         state.select_fields = SelectFields::Defer(fields);
-        Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc: slf.borrow().transaction_arc.clone() })?.into_py(py))
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
     }
 
     /// Return the earliest row ordered by `field` ASC.
@@ -699,7 +653,7 @@ impl PyQuerySet {
         if !fields.is_empty() {
             state.select_fields = SelectFields::Only(fields);
         }
-        Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc: slf.borrow().transaction_arc.clone() })?.into_py(py))
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
     }
 
     /// Return a QuerySet that evaluates to a list of tuples (or flat list when flat=True).
@@ -718,7 +672,7 @@ impl PyQuerySet {
             }
             state.result_type = ResultType::ValuesList(fields);
         }
-        Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc: slf.borrow().transaction_arc.clone() })?.into_py(py))
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
     }
 
     /// Slice or index the queryset.
@@ -767,7 +721,7 @@ impl PyQuerySet {
             if stop > start {
                 state.limit = Some(stop - start);
             }
-            Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc: slf.borrow().transaction_arc.clone() })?.into_py(py))
+            Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
         } else {
             Err(pyo3::exceptions::PyTypeError::new_err(
                 "QuerySet indices must be integers or slices",
@@ -851,7 +805,7 @@ impl PyQuerySet {
                 o.descending = !o.descending;
             }
         }
-        Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc: slf.borrow().transaction_arc.clone() })?.into_py(py))
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
     }
 
     /// Return an async iterator, optionally fetching in `chunk_size` batches.
@@ -1063,7 +1017,6 @@ impl PyQuerySet {
         let py = slf.py();
         let state = slf.borrow().state.clone();
         let model_class = clone_model_class(py, &slf.borrow().model_class);
-        let transaction_arc = slf.borrow().transaction_arc.clone();
 
         let field_values: Vec<(String, ormpi_core::value::OrmpiValue)> = match kwargs {
             Some(kw) => kw
@@ -1080,136 +1033,61 @@ impl PyQuerySet {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             use ormpi_core::backend::QueryBackend;
             use ormpi_core::model::registry::ModelRegistry;
+            use ormpi_core::query::evaluate::create_row;
             use ormpi_core::registry::DatabaseRegistry;
 
-            if let Some(arc) = transaction_arc {
-                use ormpi_core::query::evaluate::{create_row_in_txn, evaluate_in_txn};
+            let db_alias = state.database.clone().unwrap_or_else(|| "default".to_string());
+            let pool = {
+                let reg = DatabaseRegistry::global();
+                let guard = reg.read().unwrap();
+                guard
+                    .get_pool(&db_alias)
+                    .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?
+                    .clone()
+            };
+            let backend = QueryBackend(pool.backend());
+            let model_def = {
+                let reg = ModelRegistry::global();
+                let guard = reg.read().unwrap();
+                guard
+                    .get(&state.app_label, &state.model_name)
+                    .ok_or_else(|| {
+                        Python::with_gil(|_py| {
+                            pyo3::exceptions::PyRuntimeError::new_err("model not found")
+                        })
+                    })?
+                    .clone()
+            };
 
-                // Lock the transaction for the duration of INSERT + re-fetch.
-                let mut guard = arc.lock().await;
-                let txn = guard.as_mut().ok_or_else(|| {
-                    Python::with_gil(|_| {
-                        pyo3::exceptions::PyRuntimeError::new_err("Transaction already consumed")
-                    })
-                })?;
+            let pk_val = create_row(&field_values, &pool, &backend, &model_def)
+                .await
+                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
 
-                // Resolve backend and model_def via std::sync (must drop before .await).
-                let db_alias = txn.alias.clone();
-                let (backend, model_def) = {
-                    let pool = {
-                        let reg = DatabaseRegistry::global();
-                        let reg_guard = reg.read().unwrap();
-                        reg_guard
-                            .get_pool(&db_alias)
-                            .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?
-                            .clone()
-                    };
-                    let backend = QueryBackend(pool.backend());
-                    let model_def = {
-                        let reg = ModelRegistry::global();
-                        let reg_guard = reg.read().unwrap();
-                        reg_guard
-                            .get(&state.app_label, &state.model_name)
-                            .ok_or_else(|| {
-                                Python::with_gil(|_| {
-                                    pyo3::exceptions::PyRuntimeError::new_err("model not found")
-                                })
-                            })?
-                            .clone()
-                    };
-                    (backend, model_def)
-                };
+            let mut fetch_state = state.clone();
+            fetch_state.filters = ormpi_core::query::state::ConditionTree::default();
+            fetch_state.filters.filters.push(
+                ormpi_core::query::filter::FilterNode::Lookup {
+                    field_path: vec![model_def.pk_field.clone()],
+                    lookup: ormpi_core::query::filter::Lookup::Exact,
+                    value: ormpi_core::value::OrmpiValue::Int(pk_val),
+                },
+            );
+            fetch_state.limit = Some(1);
+            fetch_state.order_by.clear();
 
-                // INSERT within transaction.
-                let pk_val = create_row_in_txn(&field_values, txn, &backend, &model_def)
-                    .await
-                    .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
+            let rows = fetch_rows_for_state(&fetch_state)
+                .await
+                .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
 
-                // Re-fetch within same transaction so uncommitted data is visible.
-                let mut fetch_state = state.clone();
-                fetch_state.filters = ormpi_core::query::state::ConditionTree::default();
-                fetch_state.filters.filters.push(
-                    ormpi_core::query::filter::FilterNode::Lookup {
-                        field_path: vec![model_def.pk_field.clone()],
-                        lookup: ormpi_core::query::filter::Lookup::Exact,
-                        value: ormpi_core::value::OrmpiValue::Int(pk_val),
-                    },
-                );
-                fetch_state.limit = Some(1);
-                fetch_state.order_by.clear();
-
-                let rows = evaluate_in_txn(&fetch_state, txn, &backend, &model_def)
-                    .await
-                    .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
-
-                drop(guard);
-
-                Python::with_gil(|py| {
-                    if rows.is_empty() {
-                        return Ok(py.None());
-                    }
-                    match &model_class {
-                        Some(cls) => row_to_instance(py, &rows[0], cls),
-                        None => Ok(py.None()),
-                    }
-                })
-            } else {
-                use ormpi_core::query::evaluate::create_row;
-
-                let db_alias = state.database.clone().unwrap_or_else(|| "default".to_string());
-                let pool = {
-                    let reg = DatabaseRegistry::global();
-                    let guard = reg.read().unwrap();
-                    guard
-                        .get_pool(&db_alias)
-                        .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?
-                        .clone()
-                };
-                let backend = QueryBackend(pool.backend());
-                let model_def = {
-                    let reg = ModelRegistry::global();
-                    let guard = reg.read().unwrap();
-                    guard
-                        .get(&state.app_label, &state.model_name)
-                        .ok_or_else(|| {
-                            Python::with_gil(|_py| {
-                                pyo3::exceptions::PyRuntimeError::new_err("model not found")
-                            })
-                        })?
-                        .clone()
-                };
-
-                let pk_val = create_row(&field_values, &pool, &backend, &model_def)
-                    .await
-                    .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
-
-                // Re-fetch the created row by pk so the instance has all DB-generated values.
-                let mut fetch_state = state.clone();
-                fetch_state.filters = ormpi_core::query::state::ConditionTree::default();
-                fetch_state.filters.filters.push(
-                    ormpi_core::query::filter::FilterNode::Lookup {
-                        field_path: vec![model_def.pk_field.clone()],
-                        lookup: ormpi_core::query::filter::Lookup::Exact,
-                        value: ormpi_core::value::OrmpiValue::Int(pk_val),
-                    },
-                );
-                fetch_state.limit = Some(1);
-                fetch_state.order_by.clear();
-
-                let rows = fetch_rows_for_state(&fetch_state)
-                    .await
-                    .map_err(|e| Python::with_gil(|_py| crate::ormpi_err(e)))?;
-
-                Python::with_gil(|py| {
-                    if rows.is_empty() {
-                        return Ok(py.None());
-                    }
-                    match &model_class {
-                        Some(cls) => row_to_instance(py, &rows[0], cls),
-                        None => Ok(py.None()),
-                    }
-                })
-            }
+            Python::with_gil(|py| {
+                if rows.is_empty() {
+                    return Ok(py.None());
+                }
+                match &model_class {
+                    Some(cls) => row_to_instance(py, &rows[0], cls),
+                    None => Ok(py.None()),
+                }
+            })
         })
         .map(|b| b.into())
     }
@@ -1377,7 +1255,7 @@ impl PyQuerySet {
             Python::with_gil(|py| {
                 let dict = PyDict::new_bound(py);
                 for (k, v) in &result {
-                    dict.set_item(k, ormpi_value_to_py(py, v))?;
+                    dict.set_item(k, crate::convert::value_to_py(py,v))?;
                 }
                 Ok::<PyObject, PyErr>(dict.into())
             })
@@ -1409,7 +1287,7 @@ impl PyQuerySet {
             }
         }
 
-        Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc: slf.borrow().transaction_arc.clone() })?.into_py(py))
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
     }
 
     /// Async — get a single matching object, or create it with `create_defaults` if not found.
@@ -1754,7 +1632,7 @@ impl PyQuerySet {
         let mut state = slf.borrow().state.clone();
         let model_class = clone_model_class(py, &slf.borrow().model_class);
         state.select_related_fields = fields;
-        Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc: slf.borrow().transaction_arc.clone() })?.into_py(py))
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
     }
 
     /// Set reverse-FK / M2M paths to batch-fetch after the main query.
@@ -1764,7 +1642,7 @@ impl PyQuerySet {
         let mut state = slf.borrow().state.clone();
         let model_class = clone_model_class(py, &slf.borrow().model_class);
         state.prefetch_fields = fields;
-        Ok(Py::new(py, PyQuerySet { state, model_class, transaction_arc: slf.borrow().transaction_arc.clone() })?.into_py(py))
+        Ok(Py::new(py, PyQuerySet { state, model_class })?.into_py(py))
     }
 
     /// Async — INSERT a list of model instances in batches.
@@ -1863,7 +1741,7 @@ impl PyQuerySet {
                         if let Ok(values_obj) = instance.getattr("_values") {
                             if let Ok(d) = values_obj.downcast::<PyDict>() {
                                 for (k, v) in row_vals {
-                                    let _ = d.set_item(k, ormpi_value_to_py(py, v));
+                                    let _ = d.set_item(k, crate::convert::value_to_py(py,v));
                                 }
                                 let _ = d.set_item(&pk_field, pk);
                             }

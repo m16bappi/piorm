@@ -184,11 +184,7 @@ pub fn save(
         crate::routing::get_write_alias(&model_def.model_name, using.as_deref());
 
     // Get the pool before entering the async block (avoids non-Send guard).
-    let pool = {
-        let reg = ormpi_core::registry::DatabaseRegistry::global();
-        let guard = reg.read().unwrap();
-        guard.get_pool(&using).map_err(crate::ormpi_err)?.clone()
-    };
+    let pool = crate::get_pool_for_alias(&using)?;
 
     let slf_py = slf.into_py(py);
 
@@ -247,11 +243,7 @@ pub fn delete(slf: Bound<'_, PyAny>, using: Option<String>) -> PyResult<PyObject
         .cloned()
         .unwrap_or(OrmpiValue::Null);
 
-    let pool = {
-        let reg = ormpi_core::registry::DatabaseRegistry::global();
-        let guard = reg.read().unwrap();
-        guard.get_pool(&using).map_err(crate::ormpi_err)?.clone()
-    };
+    let pool = crate::get_pool_for_alias(&using)?;
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let (rows, counts) =
@@ -296,11 +288,7 @@ pub fn refresh_from_db(
         .cloned()
         .unwrap_or(OrmpiValue::Null);
 
-    let pool = {
-        let reg = ormpi_core::registry::DatabaseRegistry::global();
-        let guard = reg.read().unwrap();
-        guard.get_pool(&using).map_err(crate::ormpi_err)?.clone()
-    };
+    let pool = crate::get_pool_for_alias(&using)?;
 
     let slf_py = slf.into_py(py);
 

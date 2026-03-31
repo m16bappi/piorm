@@ -217,7 +217,7 @@ impl MigrationExecutor {
         Ok(())
     }
 
-    /// Apply a single migration (runs its SQL in a transaction).
+    /// Apply a single migration.
     async fn apply_migration(&self, name: &str) -> crate::Result<()> {
         let migration = self.graph.get(name).ok_or_else(|| {
             OrmpiError::MigrationError(format!("Migration not found in graph: {name}"))
@@ -274,7 +274,7 @@ impl MigrationExecutor {
         Ok(())
     }
 
-    /// Unapply a single migration (runs its backward SQL in a transaction).
+    /// Unapply a single migration.
     async fn unapply_migration(&self, name: &str) -> crate::Result<()> {
         let migration = self.graph.get(name).ok_or_else(|| {
             OrmpiError::MigrationError(format!("Migration not found in graph: {name}"))

@@ -39,6 +39,7 @@ pub fn value_to_py(py: Python<'_>, value: &OrmpiValue) -> PyObject {
                         dt.hour(),
                         dt.minute(),
                         dt.second(),
+                        dt.nanosecond() / 1000, // microseconds
                     ))
                 })
                 .map(|o| o.into())

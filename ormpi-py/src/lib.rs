@@ -4,7 +4,6 @@ pub mod fields;
 pub mod model;
 pub mod query;
 pub mod routing;
-pub mod transaction;
 mod runtime;
 
 use std::collections::HashMap;
@@ -23,9 +22,18 @@ pub(crate) fn ormpi_err(err: ormpi_core::OrmpiError) -> PyErr {
         ValidationError(_) | FieldError { .. } | UnknownField { .. } | InvalidLookup(_) => {
             PyValueError::new_err(err.to_string())
         }
-        TransactionError(_) => PyRuntimeError::new_err(err.to_string()),
         _ => PyRuntimeError::new_err(err.to_string()),
     }
+}
+
+// ── Pool lookup helper ────────────────────────────────────────────────────────
+
+/// Look up a pool by alias from the global registry.
+/// Converts `OrmpiError` into `PyErr` so it can be used with `?` in `PyResult` contexts.
+pub(crate) fn get_pool_for_alias(alias: &str) -> PyResult<ormpi_core::pool::OrmpiPool> {
+    let registry = ormpi_core::registry::DatabaseRegistry::global();
+    let guard = registry.read().unwrap();
+    guard.get_pool(alias).map_err(ormpi_err).map(|p| p.clone())
 }
 
 // ── Newtype for returning rows to Python ──────────────────────────────────────
@@ -138,116 +146,17 @@ fn configure(
                     );
                 });
             } else {
-                let registry = ormpi_core::registry::DatabaseRegistry::global();
-                let pool = {
-                    let guard = registry.read().unwrap();
-                    guard.get_pool("default").map_err(ormpi_err)?.clone()
-                };
+                let pool = get_pool_for_alias("default")?;
                 let backend = ormpi_core::backend::QueryBackend(pool.backend());
 
                 for model_def in &all_defs {
                     let ddl = ormpi_core::model::ddl::model_to_ddl(model_def, backend);
-
-                    ormpi_core::executor::execute_sql(&pool, &ddl.create_table)
-                        .await
-                        .map_err(ormpi_err)?;
-
-                    for sql in &ddl.create_indexes {
-                        ormpi_core::executor::execute_sql(&pool, sql)
-                            .await
-                            .map_err(ormpi_err)?;
-                    }
-
-                    for sql in &ddl.create_m2m_tables {
-                        ormpi_core::executor::execute_sql(&pool, sql)
-                            .await
-                            .map_err(ormpi_err)?;
-                    }
-
-                    for sql in &ddl.create_fk_constraints {
-                        if !sql.starts_with("--") {
-                            ormpi_core::executor::execute_sql(&pool, sql)
-                                .await
-                                .map_err(ormpi_err)?;
-                        }
-                    }
+                    apply_ddl_for_model(&pool, &ddl).await?;
                 }
             }
         }
 
         Python::with_gil(|py| Ok(py.None()))
-    };
-    pyo3_async_runtimes::tokio::future_into_py(py, future).map(|b| b.into())
-}
-
-/// begin(using=None) -> Awaitable[Transaction]  — open a database transaction
-#[pyfunction]
-#[pyo3(signature = (using = None))]
-fn begin(py: Python<'_>, using: Option<String>) -> PyResult<PyObject> {
-    transaction::py_begin(py, using)
-}
-
-/// create_savepoint(txn) -> Awaitable[str]  — execute SAVEPOINT and return name
-#[pyfunction]
-fn create_savepoint(py: Python<'_>, txn: &transaction::PyTransaction) -> PyResult<PyObject> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    let sp_name = format!("sp_{:08x}", nanos);
-    let sql = format!("SAVEPOINT {sp_name}");
-    let arc = txn.inner_arc();
-
-    let future = async move {
-        let mut guard = arc.lock().await;
-        let inner = guard.as_mut().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("Transaction already consumed")
-        })?;
-        inner.execute_raw(&sql).await.map_err(ormpi_err)?;
-        Ok(sp_name)
-    };
-    pyo3_async_runtimes::tokio::future_into_py(py, future).map(|b| b.into())
-}
-
-/// release_savepoint(txn, name) -> Awaitable[None]  — RELEASE SAVEPOINT
-#[pyfunction]
-fn release_savepoint(
-    py: Python<'_>,
-    txn: &transaction::PyTransaction,
-    name: String,
-) -> PyResult<PyObject> {
-    let sql = format!("RELEASE SAVEPOINT {name}");
-    let arc = txn.inner_arc();
-
-    let future = async move {
-        let mut guard = arc.lock().await;
-        let inner = guard.as_mut().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("Transaction already consumed")
-        })?;
-        inner.execute_raw(&sql).await.map_err(ormpi_err)?;
-        Python::with_gil(|py| Ok::<_, PyErr>(py.None()))
-    };
-    pyo3_async_runtimes::tokio::future_into_py(py, future).map(|b| b.into())
-}
-
-/// rollback_to_savepoint(txn, name) -> Awaitable[None]  — ROLLBACK TO SAVEPOINT
-#[pyfunction]
-fn rollback_to_savepoint(
-    py: Python<'_>,
-    txn: &transaction::PyTransaction,
-    name: String,
-) -> PyResult<PyObject> {
-    let sql = format!("ROLLBACK TO SAVEPOINT {name}");
-    let arc = txn.inner_arc();
-
-    let future = async move {
-        let mut guard = arc.lock().await;
-        let inner = guard.as_mut().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("Transaction already consumed")
-        })?;
-        inner.execute_raw(&sql).await.map_err(ormpi_err)?;
-        Python::with_gil(|py| Ok::<_, PyErr>(py.None()))
     };
     pyo3_async_runtimes::tokio::future_into_py(py, future).map(|b| b.into())
 }
@@ -273,11 +182,7 @@ fn close(py: Python<'_>) -> PyResult<PyObject> {
 #[pyo3(signature = (sql, alias = "default"))]
 fn execute_sql(py: Python<'_>, sql: String, alias: &str) -> PyResult<PyObject> {
     let alias = alias.to_string();
-    let pool = {
-        let registry = ormpi_core::registry::DatabaseRegistry::global();
-        let guard = registry.read().unwrap();
-        guard.get_pool(&alias).map_err(ormpi_err)?.clone()
-    };
+    let pool = get_pool_for_alias(&alias)?;
     let future = async move {
         ormpi_core::executor::execute_sql(&pool, &sql)
             .await
@@ -300,11 +205,7 @@ fn execute_raw(
     alias: &str,
 ) -> PyResult<PyObject> {
     let alias = alias.to_string();
-    let pool = {
-        let registry = ormpi_core::registry::DatabaseRegistry::global();
-        let guard = registry.read().unwrap();
-        guard.get_pool(&alias).map_err(ormpi_err)?.clone()
-    };
+    let pool = get_pool_for_alias(&alias)?;
 
     // Convert Python params to OrmpiValue while we hold the GIL.
     let ormpi_params: Vec<ormpi_core::value::OrmpiValue> = params
@@ -363,6 +264,39 @@ fn run_cli(args: Vec<String>) -> PyResult<i32> {
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
 }
 
+/// Execute all DDL statements for a single model against the given pool.
+/// Skips FK constraint statements that start with `--` (SQLite comments).
+async fn apply_ddl_for_model(
+    pool: &ormpi_core::pool::OrmpiPool,
+    ddl: &ormpi_core::model::ddl::DdlStatements,
+) -> PyResult<()> {
+    ormpi_core::executor::execute_sql(pool, &ddl.create_table)
+        .await
+        .map_err(ormpi_err)?;
+
+    for sql in &ddl.create_indexes {
+        ormpi_core::executor::execute_sql(pool, sql)
+            .await
+            .map_err(ormpi_err)?;
+    }
+
+    for sql in &ddl.create_m2m_tables {
+        ormpi_core::executor::execute_sql(pool, sql)
+            .await
+            .map_err(ormpi_err)?;
+    }
+
+    for sql in &ddl.create_fk_constraints {
+        if !sql.starts_with("--") {
+            ormpi_core::executor::execute_sql(pool, sql)
+                .await
+                .map_err(ormpi_err)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// create_table(model_key, alias="default") -> Awaitable[None]
 ///
 /// Generate DDL for the named model and execute it against the configured
@@ -393,41 +327,10 @@ fn create_table(py: Python<'_>, model_key: String, alias: &str) -> PyResult<PyOb
     };
 
     let future = async move {
-        let registry = ormpi_core::registry::DatabaseRegistry::global();
-        let pool = {
-            let guard = registry.read().unwrap();
-            guard.get_pool(&alias).map_err(ormpi_err)?.clone()
-        };
+        let pool = Python::with_gil(|_| get_pool_for_alias(&alias))?;
         let backend = ormpi_core::backend::QueryBackend(pool.backend());
         let ddl = ormpi_core::model::ddl::model_to_ddl(&model_def, backend);
-
-        // Execute CREATE TABLE
-        ormpi_core::executor::execute_sql(&pool, &ddl.create_table)
-            .await
-            .map_err(ormpi_err)?;
-
-        // Execute CREATE INDEX statements
-        for sql in &ddl.create_indexes {
-            ormpi_core::executor::execute_sql(&pool, sql)
-                .await
-                .map_err(ormpi_err)?;
-        }
-
-        // Execute M2M junction table statements
-        for sql in &ddl.create_m2m_tables {
-            ormpi_core::executor::execute_sql(&pool, sql)
-                .await
-                .map_err(ormpi_err)?;
-        }
-
-        // FK constraints (skip SQLite comments)
-        for sql in &ddl.create_fk_constraints {
-            if !sql.starts_with("--") {
-                ormpi_core::executor::execute_sql(&pool, sql)
-                    .await
-                    .map_err(ormpi_err)?;
-            }
-        }
+        apply_ddl_for_model(&pool, &ddl).await?;
 
         Python::with_gil(|py| Ok(py.None()))
     };
@@ -450,39 +353,12 @@ fn create_all_tables(py: Python<'_>, alias: &str) -> PyResult<PyObject> {
     };
 
     let future = async move {
-        let registry = ormpi_core::registry::DatabaseRegistry::global();
-        let pool = {
-            let guard = registry.read().unwrap();
-            guard.get_pool(&alias).map_err(ormpi_err)?.clone()
-        };
+        let pool = Python::with_gil(|_| get_pool_for_alias(&alias))?;
         let backend = ormpi_core::backend::QueryBackend(pool.backend());
 
         for model_def in &all_defs {
             let ddl = ormpi_core::model::ddl::model_to_ddl(model_def, backend);
-
-            ormpi_core::executor::execute_sql(&pool, &ddl.create_table)
-                .await
-                .map_err(ormpi_err)?;
-
-            for sql in &ddl.create_indexes {
-                ormpi_core::executor::execute_sql(&pool, sql)
-                    .await
-                    .map_err(ormpi_err)?;
-            }
-
-            for sql in &ddl.create_m2m_tables {
-                ormpi_core::executor::execute_sql(&pool, sql)
-                    .await
-                    .map_err(ormpi_err)?;
-            }
-
-            for sql in &ddl.create_fk_constraints {
-                if !sql.starts_with("--") {
-                    ormpi_core::executor::execute_sql(&pool, sql)
-                        .await
-                        .map_err(ormpi_err)?;
-                }
-            }
+            apply_ddl_for_model(&pool, &ddl).await?;
         }
 
         Python::with_gil(|py| Ok(py.None()))
@@ -501,15 +377,10 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create_table, m)?)?;
     m.add_function(wrap_pyfunction!(create_all_tables, m)?)?;
     m.add_function(wrap_pyfunction!(run_cli, m)?)?;
-    m.add_function(wrap_pyfunction!(begin, m)?)?;
-    m.add_function(wrap_pyfunction!(create_savepoint, m)?)?;
-    m.add_function(wrap_pyfunction!(release_savepoint, m)?)?;
-    m.add_function(wrap_pyfunction!(rollback_to_savepoint, m)?)?;
     fields::register_fields(m)?;
     model::register_model(m)?;
     query::register_query(m)?;
     db::register_db(m)?;
-    m.add_class::<transaction::PyTransaction>()?;
     Ok(())
 }
 

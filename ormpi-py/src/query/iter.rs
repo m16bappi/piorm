@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 
 use ormpi_core::query::state::QueryState;
 
-use super::queryset::{fetch_rows_for_state, ormpi_value_to_py, row_to_instance};
+use super::queryset::{fetch_rows_for_state, row_to_instance};
 
 /// Async iterator that evaluates a QuerySet lazily on first `__anext__` call.
 #[pyclass(name = "QuerySetIterator")]
@@ -68,7 +68,7 @@ impl PyAsyncIter {
                             .map(|row| {
                                 let d = pyo3::types::PyDict::new_bound(py);
                                 for (k, v) in &row.values {
-                                    d.set_item(k, ormpi_value_to_py(py, v))?;
+                                    d.set_item(k, crate::convert::value_to_py(py, v))?;
                                 }
                                 Ok(d.into())
                             })
