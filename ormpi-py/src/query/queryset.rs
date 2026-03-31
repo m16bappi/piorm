@@ -158,7 +158,7 @@ pub(crate) fn row_to_instance(
     // ONLY allocation: build the populated _values dict and assign to slot.
     let values = PyDict::new_bound(py);
     for (col_name, ormpi_val) in &row.values {
-        let py_val = ormpi_value_to_py(py, ormpi_val);
+        let py_val = crate::convert::value_to_py(py,ormpi_val);
         values.set_item(col_name, py_val)?;
     }
     instance.setattr("_values", &values)?;
@@ -169,29 +169,6 @@ pub(crate) fn row_to_instance(
     instance.setattr("_db", py.None())?;
 
     Ok(instance.into())
-}
-
-pub(crate) fn ormpi_value_to_py(py: Python<'_>, value: &OrmpiValue) -> PyObject {
-    match value {
-        OrmpiValue::Null => py.None(),
-        OrmpiValue::Bool(b) => b.into_py(py),
-        OrmpiValue::Int(i) => i.into_py(py),
-        OrmpiValue::Float(f) => f.into_py(py),
-        OrmpiValue::Text(s) => s.into_py(py),
-        OrmpiValue::Bytes(b) => b.clone().into_py(py),
-        OrmpiValue::Uuid(u) => u.to_string().into_py(py),
-        OrmpiValue::Json(j) => j.to_string().into_py(py),
-        OrmpiValue::Decimal(d) => d.to_string().into_py(py),
-        OrmpiValue::Date(d) => d.to_string().into_py(py),
-        OrmpiValue::Time(t) => t.to_string().into_py(py),
-        OrmpiValue::DateTime(dt) => dt.to_string().into_py(py),
-        OrmpiValue::DateTimeTz(dt) => dt.to_string().into_py(py),
-        OrmpiValue::List(items) => {
-            let py_list: Vec<PyObject> = items.iter().map(|v| ormpi_value_to_py(py, v)).collect();
-            py_list.into_py(py)
-        }
-        OrmpiValue::FExpr(_) => py.None(),
-    }
 }
 
 // ── Helper: build result list from rows ──────────────────────────────────────
@@ -209,7 +186,7 @@ fn rows_to_py(
                 .map(|row| {
                     let d = PyDict::new_bound(py);
                     for (k, v) in &row.values {
-                        d.set_item(k, ormpi_value_to_py(py, v))?;
+                        d.set_item(k, crate::convert::value_to_py(py,v))?;
                     }
                     Ok(d.into())
                 })
@@ -221,11 +198,11 @@ fn rows_to_py(
                 .iter()
                 .map(|row| {
                     let vals: Vec<PyObject> = if fields.is_empty() {
-                        row.values.values().map(|v| ormpi_value_to_py(py, v)).collect()
+                        row.values.values().map(|v| crate::convert::value_to_py(py,v)).collect()
                     } else {
                         fields
                             .iter()
-                            .map(|f| ormpi_value_to_py(py, row.values.get(f).unwrap_or(&OrmpiValue::Null)))
+                            .map(|f| crate::convert::value_to_py(py,row.values.get(f).unwrap_or(&OrmpiValue::Null)))
                             .collect()
                     };
                     pyo3::types::PyTuple::new_bound(py, vals).into()
@@ -236,7 +213,7 @@ fn rows_to_py(
         ResultType::FlatList(field) => {
             let items: Vec<PyObject> = rows
                 .iter()
-                .map(|row| ormpi_value_to_py(py, row.values.get(field).unwrap_or(&OrmpiValue::Null)))
+                .map(|row| crate::convert::value_to_py(py,row.values.get(field).unwrap_or(&OrmpiValue::Null)))
                 .collect();
             Ok(PyList::new_bound(py, items).into())
         }
@@ -305,7 +282,7 @@ fn hydrate_with_select_related(
                 let rel_dict = PyDict::new_bound(py);
                 let mut all_null = true;
                 for (k, v) in cols {
-                    let py_val = ormpi_value_to_py(py, v);
+                    let py_val = crate::convert::value_to_py(py,v);
                     if !py_val.is_none(py) {
                         all_null = false;
                     }
@@ -442,7 +419,7 @@ fn attach_prefetch_cache(
             .map(|row| {
                 let d = PyDict::new_bound(py);
                 for (k, v) in &row.values {
-                    d.set_item(k, ormpi_value_to_py(py, v))?;
+                    d.set_item(k, crate::convert::value_to_py(py,v))?;
                 }
                 Ok(d.into())
             })
@@ -1278,7 +1255,7 @@ impl PyQuerySet {
             Python::with_gil(|py| {
                 let dict = PyDict::new_bound(py);
                 for (k, v) in &result {
-                    dict.set_item(k, ormpi_value_to_py(py, v))?;
+                    dict.set_item(k, crate::convert::value_to_py(py,v))?;
                 }
                 Ok::<PyObject, PyErr>(dict.into())
             })
@@ -1764,7 +1741,7 @@ impl PyQuerySet {
                         if let Ok(values_obj) = instance.getattr("_values") {
                             if let Ok(d) = values_obj.downcast::<PyDict>() {
                                 for (k, v) in row_vals {
-                                    let _ = d.set_item(k, ormpi_value_to_py(py, v));
+                                    let _ = d.set_item(k, crate::convert::value_to_py(py,v));
                                 }
                                 let _ = d.set_item(&pk_field, pk);
                             }

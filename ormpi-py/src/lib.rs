@@ -26,6 +26,16 @@ pub(crate) fn ormpi_err(err: ormpi_core::OrmpiError) -> PyErr {
     }
 }
 
+// ── Pool lookup helper ────────────────────────────────────────────────────────
+
+/// Look up a pool by alias from the global registry.
+/// Converts `OrmpiError` into `PyErr` so it can be used with `?` in `PyResult` contexts.
+pub(crate) fn get_pool_for_alias(alias: &str) -> PyResult<ormpi_core::pool::OrmpiPool> {
+    let registry = ormpi_core::registry::DatabaseRegistry::global();
+    let guard = registry.read().unwrap();
+    guard.get_pool(alias).map_err(ormpi_err).map(|p| p.clone())
+}
+
 // ── Newtype for returning rows to Python ──────────────────────────────────────
 
 struct Row(Vec<(String, serde_json::Value)>);
@@ -136,11 +146,7 @@ fn configure(
                     );
                 });
             } else {
-                let registry = ormpi_core::registry::DatabaseRegistry::global();
-                let pool = {
-                    let guard = registry.read().unwrap();
-                    guard.get_pool("default").map_err(ormpi_err)?.clone()
-                };
+                let pool = get_pool_for_alias("default")?;
                 let backend = ormpi_core::backend::QueryBackend(pool.backend());
 
                 for model_def in &all_defs {
@@ -199,11 +205,7 @@ fn close(py: Python<'_>) -> PyResult<PyObject> {
 #[pyo3(signature = (sql, alias = "default"))]
 fn execute_sql(py: Python<'_>, sql: String, alias: &str) -> PyResult<PyObject> {
     let alias = alias.to_string();
-    let pool = {
-        let registry = ormpi_core::registry::DatabaseRegistry::global();
-        let guard = registry.read().unwrap();
-        guard.get_pool(&alias).map_err(ormpi_err)?.clone()
-    };
+    let pool = get_pool_for_alias(&alias)?;
     let future = async move {
         ormpi_core::executor::execute_sql(&pool, &sql)
             .await
@@ -226,11 +228,7 @@ fn execute_raw(
     alias: &str,
 ) -> PyResult<PyObject> {
     let alias = alias.to_string();
-    let pool = {
-        let registry = ormpi_core::registry::DatabaseRegistry::global();
-        let guard = registry.read().unwrap();
-        guard.get_pool(&alias).map_err(ormpi_err)?.clone()
-    };
+    let pool = get_pool_for_alias(&alias)?;
 
     // Convert Python params to OrmpiValue while we hold the GIL.
     let ormpi_params: Vec<ormpi_core::value::OrmpiValue> = params
@@ -319,11 +317,7 @@ fn create_table(py: Python<'_>, model_key: String, alias: &str) -> PyResult<PyOb
     };
 
     let future = async move {
-        let registry = ormpi_core::registry::DatabaseRegistry::global();
-        let pool = {
-            let guard = registry.read().unwrap();
-            guard.get_pool(&alias).map_err(ormpi_err)?.clone()
-        };
+        let pool = Python::with_gil(|_| get_pool_for_alias(&alias))?;
         let backend = ormpi_core::backend::QueryBackend(pool.backend());
         let ddl = ormpi_core::model::ddl::model_to_ddl(&model_def, backend);
 
@@ -376,11 +370,7 @@ fn create_all_tables(py: Python<'_>, alias: &str) -> PyResult<PyObject> {
     };
 
     let future = async move {
-        let registry = ormpi_core::registry::DatabaseRegistry::global();
-        let pool = {
-            let guard = registry.read().unwrap();
-            guard.get_pool(&alias).map_err(ormpi_err)?.clone()
-        };
+        let pool = Python::with_gil(|_| get_pool_for_alias(&alias))?;
         let backend = ormpi_core::backend::QueryBackend(pool.backend());
 
         for model_def in &all_defs {
