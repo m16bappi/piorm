@@ -1,10 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use sea_query::{Alias, Expr, ExprTrait, Query};
-use sqlx::Row;
 
-use crate::backend::QueryBackend;
-use crate::bind::{mysql_arguments, postgres_arguments, sqlite_arguments};
+use crate::backend::{DatabaseBackend, QueryBackend};
 use crate::error::OrmpiError;
 use crate::fields::{FieldType, OnDelete};
 use crate::model::def::ModelDef;
@@ -93,44 +91,29 @@ async fn insert_instance(
         .collect();
 
     // Postgres uses RETURNING to get the generated pk; others use last_insert_id.
-    use crate::backend::DatabaseBackend;
     let pk_col = Alias::new(&model_def.pk_field);
 
-    match pool {
-        OrmpiPool::Sqlite(p) => {
-            let mut stmt = Query::insert();
-            stmt.into_table(Alias::new(&model_def.table_name))
-                .columns(columns)
-                .values_panic(row_values);
-            let (sql, sea_vals) = backend.build_insert(&stmt);
-            let args = sqlite_arguments(sea_vals);
-            let result = sqlx::query_with(&sql, args).execute(p).await?;
-            Ok(OrmpiValue::Int(result.last_insert_rowid()))
-        }
-        OrmpiPool::Mysql(p) => {
-            let mut stmt = Query::insert();
-            stmt.into_table(Alias::new(&model_def.table_name))
-                .columns(columns)
-                .values_panic(row_values);
-            let (sql, sea_vals) = backend.build_insert(&stmt);
-            let args = mysql_arguments(sea_vals);
-            let result = sqlx::query_with(&sql, args).execute(p).await?;
-            Ok(OrmpiValue::Int(result.last_insert_id() as i64))
-        }
-        OrmpiPool::Postgres(p) => {
-            let mut stmt = Query::insert();
-            stmt.into_table(Alias::new(&model_def.table_name))
-                .columns(columns)
-                .values_panic(row_values)
-                .returning_col(pk_col);
-            let (sql, sea_vals) = backend.build_insert(&stmt);
-            let args = postgres_arguments(sea_vals);
-            let row = sqlx::query_with(&sql, args).fetch_one(p).await?;
-            let id: i64 = row
-                .try_get(model_def.pk_field.as_str())
-                .unwrap_or_default();
-            Ok(OrmpiValue::Int(id))
-        }
+    if matches!(pool.backend(), DatabaseBackend::Postgres) {
+        let mut stmt = Query::insert();
+        stmt.into_table(Alias::new(&model_def.table_name))
+            .columns(columns)
+            .values_panic(row_values)
+            .returning_col(pk_col);
+        let (sql, sea_vals) = backend.build_insert(&stmt);
+        let row = pool.fetch_one(&sql, sea_vals).await?;
+        let id: i64 = row
+            .get(model_def.pk_field.as_str())
+            .and_then(|v| if let OrmpiValue::Int(i) = v { Some(*i) } else { None })
+            .unwrap_or(0);
+        Ok(OrmpiValue::Int(id))
+    } else {
+        let mut stmt = Query::insert();
+        stmt.into_table(Alias::new(&model_def.table_name))
+            .columns(columns)
+            .values_panic(row_values);
+        let (sql, sea_vals) = backend.build_insert(&stmt);
+        let id = pool.insert_last_id(&sql, sea_vals).await?;
+        Ok(OrmpiValue::Int(id))
     }
 }
 
@@ -186,22 +169,7 @@ async fn update_instance(
     );
 
     let (sql, sea_vals) = backend.build_update(&stmt);
-
-    match pool {
-        OrmpiPool::Sqlite(p) => {
-            let args = sqlite_arguments(sea_vals);
-            sqlx::query_with(&sql, args).execute(p).await?;
-        }
-        OrmpiPool::Mysql(p) => {
-            let args = mysql_arguments(sea_vals);
-            sqlx::query_with(&sql, args).execute(p).await?;
-        }
-        OrmpiPool::Postgres(p) => {
-            let args = postgres_arguments(sea_vals);
-            sqlx::query_with(&sql, args).execute(p).await?;
-        }
-    }
-
+    pool.execute(&sql, sea_vals).await?;
     Ok(pk_val.clone())
 }
 
@@ -264,20 +232,7 @@ async fn set_null_children_by_pk(
         .and_where(Expr::col(Alias::new(fk_col)).eq(pk_value.to_sea_value()))
         .to_owned();
     let (sql, sea_vals) = backend.build_update(&stmt);
-    let rows = match pool {
-        OrmpiPool::Sqlite(p) => {
-            sqlx::query_with(&sql, sqlite_arguments(sea_vals))
-                .execute(p).await?.rows_affected() as usize
-        }
-        OrmpiPool::Mysql(p) => {
-            sqlx::query_with(&sql, mysql_arguments(sea_vals))
-                .execute(p).await?.rows_affected() as usize
-        }
-        OrmpiPool::Postgres(p) => {
-            sqlx::query_with(&sql, postgres_arguments(sea_vals))
-                .execute(p).await?.rows_affected() as usize
-        }
-    };
+    let rows = pool.execute(&sql, sea_vals).await? as usize;
     Ok(rows)
 }
 
@@ -294,20 +249,7 @@ async fn delete_children_by_pk(
         .and_where(Expr::col(Alias::new(fk_col)).eq(pk_value.to_sea_value()))
         .to_owned();
     let (sql, sea_vals) = backend.build_delete(&stmt);
-    let rows = match pool {
-        OrmpiPool::Sqlite(p) => {
-            sqlx::query_with(&sql, sqlite_arguments(sea_vals))
-                .execute(p).await?.rows_affected() as usize
-        }
-        OrmpiPool::Mysql(p) => {
-            sqlx::query_with(&sql, mysql_arguments(sea_vals))
-                .execute(p).await?.rows_affected() as usize
-        }
-        OrmpiPool::Postgres(p) => {
-            sqlx::query_with(&sql, postgres_arguments(sea_vals))
-                .execute(p).await?.rows_affected() as usize
-        }
-    };
+    let rows = pool.execute(&sql, sea_vals).await? as usize;
     Ok(rows)
 }
 
@@ -328,20 +270,7 @@ pub async fn delete_children_by_pk_list(
         .and_where(Expr::col(Alias::new(fk_col)).is_in(sea_vals))
         .to_owned();
     let (sql, sea_vals) = backend.build_delete(&stmt);
-    let rows = match pool {
-        OrmpiPool::Sqlite(p) => {
-            sqlx::query_with(&sql, sqlite_arguments(sea_vals))
-                .execute(p).await?.rows_affected() as usize
-        }
-        OrmpiPool::Mysql(p) => {
-            sqlx::query_with(&sql, mysql_arguments(sea_vals))
-                .execute(p).await?.rows_affected() as usize
-        }
-        OrmpiPool::Postgres(p) => {
-            sqlx::query_with(&sql, postgres_arguments(sea_vals))
-                .execute(p).await?.rows_affected() as usize
-        }
-    };
+    let rows = pool.execute(&sql, sea_vals).await? as usize;
     Ok(rows)
 }
 
@@ -383,30 +312,7 @@ pub async fn delete_instance(
         .to_owned();
 
     let (sql, sea_vals) = backend.build_delete(&stmt);
-
-    let rows_affected = match pool {
-        OrmpiPool::Sqlite(p) => {
-            let args = sqlite_arguments(sea_vals);
-            sqlx::query_with(&sql, args)
-                .execute(p)
-                .await?
-                .rows_affected() as usize
-        }
-        OrmpiPool::Mysql(p) => {
-            let args = mysql_arguments(sea_vals);
-            sqlx::query_with(&sql, args)
-                .execute(p)
-                .await?
-                .rows_affected() as usize
-        }
-        OrmpiPool::Postgres(p) => {
-            let args = postgres_arguments(sea_vals);
-            sqlx::query_with(&sql, args)
-                .execute(p)
-                .await?
-                .rows_affected() as usize
-        }
-    };
+    let rows_affected = pool.execute(&sql, sea_vals).await? as usize;
 
     *counts.entry(model_def.model_name.clone()).or_insert(0) += rows_affected;
     Ok((rows_affected, counts))
@@ -422,8 +328,6 @@ pub async fn fetch_instance(
     model_def: &ModelDef,
     pk_value: OrmpiValue,
 ) -> Result<HashMap<String, serde_json::Value>> {
-    use crate::executor::{fetch_row_sqlite, fetch_row_mysql, fetch_row_postgres};
-
     let backend = QueryBackend(pool.backend());
     let pk_col = Alias::new(&model_def.pk_field);
     let table = Alias::new(&model_def.table_name);
@@ -437,47 +341,38 @@ pub async fn fetch_instance(
 
     let (sql, sea_vals) = backend.build_select(&stmt);
 
-    let row_map = match pool {
-        OrmpiPool::Sqlite(p) => {
-            let args = sqlite_arguments(sea_vals);
-            let row = sqlx::query_with(&sql, args)
-                .fetch_one(p)
-                .await
-                .map_err(|e| match e {
-                    sqlx::Error::RowNotFound => OrmpiError::DoesNotExist {
-                        model: model_def.model_name.clone(),
-                    },
-                    other => OrmpiError::Database(other),
-                })?;
-            fetch_row_sqlite(&row)
-        }
-        OrmpiPool::Mysql(p) => {
-            let args = mysql_arguments(sea_vals);
-            let row = sqlx::query_with(&sql, args)
-                .fetch_one(p)
-                .await
-                .map_err(|e| match e {
-                    sqlx::Error::RowNotFound => OrmpiError::DoesNotExist {
-                        model: model_def.model_name.clone(),
-                    },
-                    other => OrmpiError::Database(other),
-                })?;
-            fetch_row_mysql(&row)
-        }
-        OrmpiPool::Postgres(p) => {
-            let args = postgres_arguments(sea_vals);
-            let row = sqlx::query_with(&sql, args)
-                .fetch_one(p)
-                .await
-                .map_err(|e| match e {
-                    sqlx::Error::RowNotFound => OrmpiError::DoesNotExist {
-                        model: model_def.model_name.clone(),
-                    },
-                    other => OrmpiError::Database(other),
-                })?;
-            fetch_row_postgres(&row)
-        }
-    };
+    let row = pool.fetch_one(&sql, sea_vals).await.map_err(|e| match e {
+        OrmpiError::Database(sqlx::Error::RowNotFound) => OrmpiError::DoesNotExist {
+            model: model_def.model_name.clone(),
+        },
+        other => other,
+    })?;
 
-    Ok(row_map.into_iter().collect())
+    Ok(row.values.into_iter().map(|(k, v)| (k, ormpi_value_to_json(v))).collect())
+}
+
+fn ormpi_value_to_json(v: OrmpiValue) -> serde_json::Value {
+    match v {
+        OrmpiValue::Null => serde_json::Value::Null,
+        OrmpiValue::Bool(b) => serde_json::Value::Bool(b),
+        OrmpiValue::Int(i) => serde_json::Value::Number(i.into()),
+        OrmpiValue::Float(f) => serde_json::Number::from_f64(f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        OrmpiValue::Text(s) => serde_json::Value::String(s),
+        OrmpiValue::Bytes(b) => serde_json::Value::Array(
+            b.into_iter().map(|byte| serde_json::Value::Number(byte.into())).collect(),
+        ),
+        OrmpiValue::Date(d) => serde_json::Value::String(d.to_string()),
+        OrmpiValue::Time(t) => serde_json::Value::String(t.to_string()),
+        OrmpiValue::DateTime(dt) => serde_json::Value::String(dt.to_string()),
+        OrmpiValue::DateTimeTz(dt) => serde_json::Value::String(dt.to_rfc3339()),
+        OrmpiValue::Uuid(u) => serde_json::Value::String(u.to_string()),
+        OrmpiValue::Json(j) => j,
+        OrmpiValue::Decimal(d) => serde_json::Value::String(d.to_string()),
+        OrmpiValue::List(items) => {
+            serde_json::Value::Array(items.into_iter().map(ormpi_value_to_json).collect())
+        }
+        OrmpiValue::FExpr(_) => serde_json::Value::Null,
+    }
 }
