@@ -104,7 +104,13 @@ async fn insert_instance(
         let id: i64 = row
             .get(model_def.pk_field.as_str())
             .and_then(|v| if let OrmpiValue::Int(i) = v { Some(*i) } else { None })
-            .unwrap_or(0);
+            .ok_or_else(|| OrmpiError::FieldError {
+                model: model_def.model_name.clone(),
+                field: model_def.pk_field.clone(),
+                message: format!(
+                    "failed to read generated primary key from RETURNING clause"
+                ),
+            })?;
         Ok(OrmpiValue::Int(id))
     } else {
         let mut stmt = Query::insert();
@@ -175,46 +181,53 @@ async fn update_instance(
 
 // ── delete_instance ───────────────────────────────────────────────────────────
 
-/// Find all (child_model_def, fk_column_attname) pairs that CASCADE-delete
-/// when the given parent model is deleted.
-pub fn find_cascade_children(parent_model_name: &str) -> Vec<(ModelDef, String)> {
+/// Walk every model in the registry and collect (child_def, field_name) pairs
+/// where the field is a FK/O2O referencing `parent_model_name` and the
+/// `predicate` returns true for that field's `on_delete` policy.
+///
+/// `name_fn` extracts the column identifier to store alongside each child def.
+fn find_children_matching(
+    parent_model_name: &str,
+    predicate: impl Fn(&OnDelete) -> bool,
+    name_fn: impl Fn(&crate::fields::FieldDef) -> String,
+) -> Vec<(ModelDef, String)> {
     let reg = ModelRegistry::global();
     let guard = reg.read().unwrap();
     let mut children = Vec::new();
+
     for child_def in guard.all() {
         for field in child_def.fields.values() {
             let (to, on_delete) = match &field.field_type {
                 FieldType::ForeignKey { to, on_delete, .. } => (to.as_str(), on_delete),
-                FieldType::OneToOne { to, on_delete } => (to.as_str(), on_delete),
+                FieldType::OneToOne { to, on_delete }       => (to.as_str(), on_delete),
                 _ => continue,
             };
-            if to == parent_model_name && matches!(on_delete, OnDelete::Cascade) {
-                children.push((child_def.clone(), field.attname.clone()));
+            if to == parent_model_name && predicate(on_delete) {
+                children.push((child_def.clone(), name_fn(field)));
             }
         }
     }
     children
 }
 
+/// Find all (child_model_def, fk_column_attname) pairs that CASCADE-delete
+/// when the given parent model is deleted.
+pub fn find_cascade_children(parent_model_name: &str) -> Vec<(ModelDef, String)> {
+    find_children_matching(
+        parent_model_name,
+        |od| matches!(od, OnDelete::Cascade),
+        |f| f.attname.clone(),
+    )
+}
+
 /// Find all (child_model_def, fk_column_name) pairs with SET_NULL behaviour
 /// that reference the given parent model.
 pub fn find_set_null_children(parent_model_name: &str) -> Vec<(ModelDef, String)> {
-    let reg = ModelRegistry::global();
-    let guard = reg.read().unwrap();
-    let mut children = Vec::new();
-    for child_def in guard.all() {
-        for field in child_def.fields.values() {
-            let (to, on_delete) = match &field.field_type {
-                FieldType::ForeignKey { to, on_delete, .. } => (to.as_str(), on_delete),
-                FieldType::OneToOne { to, on_delete } => (to.as_str(), on_delete),
-                _ => continue,
-            };
-            if to == parent_model_name && matches!(on_delete, OnDelete::SetNull) {
-                children.push((child_def.clone(), field.column_name()));
-            }
-        }
-    }
-    children
+    find_children_matching(
+        parent_model_name,
+        |od| matches!(od, OnDelete::SetNull),
+        |f| f.column_name(),
+    )
 }
 
 /// SET fk_col = NULL on child rows where fk_col = pk_value.
@@ -290,7 +303,6 @@ pub async fn delete_instance(
     for (child_def, fk_col) in &set_null_children {
         set_null_children_by_pk(pool, &backend, &child_def.table_name, fk_col, &pk_value).await?;
         // SET_NULL doesn't delete rows, so we don't add to counts.
-        let _ = child_def; // suppress unused warning
     }
 
     // Cascade: delete children first.

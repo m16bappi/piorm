@@ -6,6 +6,21 @@ use crate::bind::{mysql_arguments, postgres_arguments, sqlite_arguments};
 use crate::config::DatabaseConfig;
 use crate::row::{mysql_row_to_ormpi, postgres_row_to_ormpi, sqlite_row_to_ormpi, OrmpiRow};
 
+/// Build a sqlx pool with the standard Ormpi options and wrap it in the given `OrmpiPool` variant.
+///
+/// Usage: `connect_pool!(SqlitePoolOptions, Sqlite, &url, opts).await?`
+macro_rules! connect_pool {
+    ($options_ty:path, $variant:ident, $url:expr, $opts:expr) => {
+        <$options_ty>::new()
+            .max_connections($opts.max_connections)
+            .min_connections($opts.min_connections)
+            .acquire_timeout($opts.acquire_timeout)
+            .connect($url)
+            .await
+            .map(OrmpiPool::$variant)
+    };
+}
+
 #[derive(Clone)]
 pub enum OrmpiPool {
     Sqlite(Pool<Sqlite>),
@@ -16,38 +31,17 @@ pub enum OrmpiPool {
 impl OrmpiPool {
     /// Create a pool from a `DatabaseConfig`.
     pub async fn connect(config: &DatabaseConfig) -> crate::Result<Self> {
+        use sqlx::{mysql::MySqlPoolOptions, postgres::PgPoolOptions, sqlite::SqlitePoolOptions};
+
         let url = config.connection_url();
         let opts = &config.pool;
 
-        match config.backend {
-            DatabaseBackend::Sqlite => {
-                let pool = sqlx::sqlite::SqlitePoolOptions::new()
-                    .max_connections(opts.max_connections)
-                    .min_connections(opts.min_connections)
-                    .acquire_timeout(opts.acquire_timeout)
-                    .connect(&url)
-                    .await?;
-                Ok(OrmpiPool::Sqlite(pool))
-            }
-            DatabaseBackend::Mysql => {
-                let pool = sqlx::mysql::MySqlPoolOptions::new()
-                    .max_connections(opts.max_connections)
-                    .min_connections(opts.min_connections)
-                    .acquire_timeout(opts.acquire_timeout)
-                    .connect(&url)
-                    .await?;
-                Ok(OrmpiPool::Mysql(pool))
-            }
-            DatabaseBackend::Postgres => {
-                let pool = sqlx::postgres::PgPoolOptions::new()
-                    .max_connections(opts.max_connections)
-                    .min_connections(opts.min_connections)
-                    .acquire_timeout(opts.acquire_timeout)
-                    .connect(&url)
-                    .await?;
-                Ok(OrmpiPool::Postgres(pool))
-            }
-        }
+        let pool = match config.backend {
+            DatabaseBackend::Sqlite   => connect_pool!(SqlitePoolOptions, Sqlite,   &url, opts)?,
+            DatabaseBackend::Mysql    => connect_pool!(MySqlPoolOptions,  Mysql,    &url, opts)?,
+            DatabaseBackend::Postgres => connect_pool!(PgPoolOptions,     Postgres, &url, opts)?,
+        };
+        Ok(pool)
     }
 
     pub fn backend(&self) -> DatabaseBackend {
