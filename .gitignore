@@ -22,6 +22,7 @@ sdist/
 var/
 wheels/
 libpiorm*/
+*.dSYM/
 share/python-wheels/
 *.egg-info/
 .installed.cfg
