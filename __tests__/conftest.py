@@ -1,13 +1,13 @@
 """
-Shared fixtures for all ormpi tests.
+Shared fixtures for all piorm tests.
 
 Session-scoped fixture creates tables once.  Each test cleans up via
 DELETE queries so the next test starts with empty tables.
 """
 
 import pytest_asyncio
-import ormpi
-from ormpi.fields import (
+import piorm
+from piorm.fields import (
     BooleanField,
     CharField,
     FloatField,
@@ -18,14 +18,14 @@ from ormpi.fields import (
     CASCADE,
 )
 
-class Tag(ormpi.Model):
+class Tag(piorm.Model):
     name = CharField(max_length=50, unique=True)
 
     class Meta:
         db_table = "tags"
 
 
-class Author(ormpi.Model):
+class Author(piorm.Model):
     name = CharField(max_length=100)
     email = CharField(max_length=200, unique=True)
     age = IntegerField(null=True)
@@ -38,7 +38,7 @@ class Author(ormpi.Model):
         db_table = "authors"
 
 
-class Article(ormpi.Model):
+class Article(piorm.Model):
     title = CharField(max_length=200)
     body = TextField(null=True)
     views = IntegerField(default=0)
@@ -59,9 +59,9 @@ DB_CONFIG = {"default": {"ENGINE": "sqlite", "NAME": ":memory:"}}
 
 @pytest_asyncio.fixture(scope="session", autouse=True)
 async def _db_session():
-    await ormpi.configure(DB_CONFIG, auto_sync=True)
+    await piorm.configure(DB_CONFIG, auto_sync=True)
     yield
-    await ormpi.close()
+    await piorm.close()
 
 
 # ---------------------------------------------------------------------------

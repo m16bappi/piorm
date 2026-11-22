@@ -2,13 +2,13 @@
 
 ## Problem
 
-Every ormpi model instance currently allocates **4 Python containers** for bookkeeping:
+Every piorm model instance currently allocates **4 Python containers** for bookkeeping:
 
 ```
 instance.__dict__        ← ~72B (always exists)
-  ├── "_ormpi_values"    ← dict: field values              ~72B + entries
-  ├── "_ormpi_dirty"     ← set:  dirty field names         ~216B base
-  └── "_ormpi_state"     ← dict: {"adding": bool, "db": str|None}  ~72B + entries
+  ├── "_piorm_values"    ← dict: field values              ~72B + entries
+  ├── "_piorm_dirty"     ← set:  dirty field names         ~216B base
+  └── "_piorm_state"     ← dict: {"adding": bool, "db": str|None}  ~72B + entries
 ```
 
 **~330B overhead per instance** before any field data is stored. At 1M instances that's ~330MB of pure infrastructure.
@@ -23,7 +23,7 @@ instance.__dict__        ← ~72B (always exists)
 | Tortoise | `__dict__` directly | No | None | ~200B |
 | **Pony** | `_vals_` dict in slot | **Yes** | `_wbits_` bitmask | **~100B** |
 | Peewee | `__data__` dict + `_dirty` set | No | `_dirty` set | ~280B |
-| **ormpi** | `_ormpi_values` dict + set + dict | No | `_ormpi_dirty` set | **~330B** |
+| **piorm** | `_piorm_values` dict + set + dict | No | `_piorm_dirty` set | **~330B** |
 | Django | `__dict__` + `_state` object | No | O(N) compare on save | ~380B |
 | SQLAlchemy | `__dict__` + separate `InstanceState` | No (instance) | `committed_state` dict | ~600B |
 
@@ -105,9 +105,9 @@ Supports up to 64 fields in a single `int`. Python `int` is arbitrary precision,
 BEFORE (4 containers):                   AFTER (1 container):
 ────────────────────────                 ────────────────────────
 __dict__       ~72B                      __slots__     0B  (eliminated)
-_ormpi_values  ~72B  (dict)              _values       ~72B (dict — only alloc)
-_ormpi_dirty   ~216B (set)               _dirty        0B  (int in slot)
-_ormpi_state   ~72B  (dict)              _adding       0B  (bool in slot)
+_piorm_values  ~72B  (dict)              _values       ~72B (dict — only alloc)
+_piorm_dirty   ~216B (set)               _dirty        0B  (int in slot)
+_piorm_state   ~72B  (dict)              _adding       0B  (bool in slot)
                                           _db           0B  (ref in slot)
 ────────────────────────                 ────────────────────────
 Total: ~330B, 4 allocs                   Total: ~72B, 1 alloc
@@ -125,12 +125,12 @@ Total: ~330B, 4 allocs                   Total: ~72B, 1 alloc
 
 | Operation | Current | Proposed |
 |-----------|---------|----------|
-| Field write | `_ormpi_dirty.add(name)` — hash + set insert | `_dirty \|= bit` — single OR |
-| Field read | `_ormpi_values[name]` — 2 lookups (`__dict__` → dict) | `_values[name]` — 1 lookup (slot → dict) |
-| Is dirty? | `len(_ormpi_dirty) > 0` | `_dirty != 0` — int compare |
-| Is field dirty? | `name in _ormpi_dirty` — hash lookup | `_dirty & bit` — int AND |
-| Get dirty fields | `list(_ormpi_dirty)` | comprehension over `_field_bits` |
-| Clear on save | `_ormpi_dirty.clear()` — set clear | `_dirty = 0` — int write |
+| Field write | `_piorm_dirty.add(name)` — hash + set insert | `_dirty \|= bit` — single OR |
+| Field read | `_piorm_values[name]` — 2 lookups (`__dict__` → dict) | `_values[name]` — 1 lookup (slot → dict) |
+| Is dirty? | `len(_piorm_dirty) > 0` | `_dirty != 0` — int compare |
+| Is field dirty? | `name in _piorm_dirty` — hash lookup | `_dirty & bit` — int AND |
+| Get dirty fields | `list(_piorm_dirty)` | comprehension over `_field_bits` |
+| Clear on save | `_piorm_dirty.clear()` — set clear | `_dirty = 0` — int write |
 | Hydrate from row | 3 container allocations | 1 container allocation |
 
 ---
@@ -145,17 +145,17 @@ fn row_to_instance(py, row, model_class) -> PyResult<PyObject> {
 
     let values = PyDict::new_bound(py);               // ALLOC 1
     for (col, val) in &row.values {
-        values.set_item(col, ormpi_value_to_py(py, val))?;
+        values.set_item(col, piorm_value_to_py(py, val))?;
     }
-    instance.setattr("_ormpi_values", &values)?;
+    instance.setattr("_piorm_values", &values)?;
 
     let state = PyDict::new_bound(py);                // ALLOC 2
     state.set_item("adding", false)?;
     state.set_item("db", py.None())?;
-    instance.setattr("_ormpi_state", &state)?;
+    instance.setattr("_piorm_state", &state)?;
 
     let dirty = PySet::empty_bound(py)?;              // ALLOC 3
-    instance.setattr("_ormpi_dirty", dirty)?;
+    instance.setattr("_piorm_dirty", dirty)?;
 
     Ok(instance.into())
 }
@@ -169,7 +169,7 @@ fn row_to_instance(py, row, model_class) -> PyResult<PyObject> {
 
     let values = PyDict::new_bound(py);               // ONLY ALLOC
     for (col, val) in &row.values {
-        values.set_item(col, ormpi_value_to_py(py, val))?;
+        values.set_item(col, piorm_value_to_py(py, val))?;
     }
     instance.setattr("_values", &values)?;
 
@@ -186,7 +186,7 @@ fn row_to_instance(py, row, model_class) -> PyResult<PyObject> {
 ```rust
 // OLD
 pub(crate) fn extract_dirty(instance) -> HashSet<String> {
-    let set = instance.getattr("_ormpi_dirty")?.downcast::<PySet>()?;
+    let set = instance.getattr("_piorm_dirty")?.downcast::<PySet>()?;
     let mut hs = HashSet::new();
     for item in set.iter() { hs.insert(item.extract()?); }
     hs
@@ -206,7 +206,7 @@ pub(crate) fn extract_dirty(instance, field_bits: &PyDict) -> HashSet<String> {
 }
 
 // Clear dirty after save
-// OLD: instance.getattr("_ormpi_dirty")?.call_method0("clear")?;
+// OLD: instance.getattr("_piorm_dirty")?.call_method0("clear")?;
 // NEW: instance.setattr("_dirty", 0u64)?;
 
 // Update state after save
@@ -231,17 +231,17 @@ pub(crate) fn extract_dirty(instance, field_bits: &PyDict) -> HashSet<String> {
 
 ## Migration Map
 
-All changes are to **private** `_ormpi_*` attributes — no public API breakage.
+All changes are to **private** `_piorm_*` attributes — no public API breakage.
 
 | Old | New |
 |-----|-----|
-| `instance._ormpi_values` | `instance._values` |
-| `instance._ormpi_dirty` (set) | `instance._dirty` (int bitmask) |
-| `"title" in instance._ormpi_dirty` | `bool(instance._dirty & Model._field_bits["title"])` |
-| `instance._ormpi_dirty.add("title")` | `instance._dirty \|= Model._field_bits["title"]` |
-| `instance._ormpi_dirty.clear()` | `instance._dirty = 0` |
-| `instance._ormpi_state["adding"]` | `instance._adding` |
-| `instance._ormpi_state["db"]` | `instance._db` |
+| `instance._piorm_values` | `instance._values` |
+| `instance._piorm_dirty` (set) | `instance._dirty` (int bitmask) |
+| `"title" in instance._piorm_dirty` | `bool(instance._dirty & Model._field_bits["title"])` |
+| `instance._piorm_dirty.add("title")` | `instance._dirty \|= Model._field_bits["title"]` |
+| `instance._piorm_dirty.clear()` | `instance._dirty = 0` |
+| `instance._piorm_state["adding"]` | `instance._adding` |
+| `instance._piorm_state["db"]` | `instance._db` |
 
 ---
 
@@ -256,4 +256,4 @@ All changes are to **private** `_ormpi_*` attributes — no public API breakage.
 | GC pressure | 4 tracked objects | 1 tracked object | **-75%** |
 | Public API breakage | — | None | — |
 
-This brings ormpi's per-instance overhead from the heaviest among lightweight ORMs (~330B) to the lightest (~72B), matching Pony's efficiency while keeping ormpi's existing dirty-tracking semantics intact.
+This brings piorm's per-instance overhead from the heaviest among lightweight ORMs (~330B) to the lightest (~72B), matching Pony's efficiency while keeping piorm's existing dirty-tracking semantics intact.

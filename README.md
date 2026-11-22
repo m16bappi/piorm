@@ -1,4 +1,4 @@
-# ormpi
+# piorm
 
 A Django-style **async ORM for Python**, with the query engine written in **Rust**.
 
@@ -10,25 +10,25 @@ Supports **SQLite**, **PostgreSQL** and **MySQL**.
 
 ```python
 import asyncio
-import ormpi
-from ormpi.fields import CharField, IntegerField, BooleanField, ForeignKey, CASCADE
-from ormpi.expr import Q, F, Count
+import piorm
+from piorm.fields import CharField, IntegerField, BooleanField, ForeignKey, CASCADE
+from piorm.expr import Q, F, Count
 
 
-class Author(ormpi.Model):
+class Author(piorm.Model):
     name = CharField(max_length=100)
     email = CharField(max_length=200, unique=True)
     active = BooleanField(default=True)
 
 
-class Article(ormpi.Model):
+class Article(piorm.Model):
     title = CharField(max_length=200)
     views = IntegerField(default=0)
     author = ForeignKey("Author", on_delete=CASCADE)
 
 
 async def main():
-    await ormpi.configure(
+    await piorm.configure(
         {"default": {"ENGINE": "sqlite", "NAME": ":memory:"}},
         auto_sync=True,
     )
@@ -49,7 +49,7 @@ async def main():
     stats = await Article.objects.aggregate(total=Count("id"))
     print(stats)
 
-    await ormpi.close()
+    await piorm.close()
 
 
 asyncio.run(main())
@@ -80,32 +80,32 @@ asyncio.run(main())
 ```bash
 export DATABASE_URL=sqlite://./app.sqlite3
 
-ormpi makemigrations    # detect model changes and write migration files
-ormpi migrate           # apply or reverse migrations
-ormpi showmigrations    # list migrations and whether they are applied
-ormpi sqlmigrate <name> # print the SQL for a migration
-ormpi inspectdb         # generate models from an existing database
+piorm makemigrations    # detect model changes and write migration files
+piorm migrate           # apply or reverse migrations
+piorm showmigrations    # list migrations and whether they are applied
+piorm sqlmigrate <name> # print the SQL for a migration
+piorm inspectdb         # generate models from an existing database
 ```
 
 ## Architecture
 
 ```
-python/ormpi/     Python API: Model, fields, Q/F expressions, routers, type stubs
+python/piorm/     Python API: Model, fields, Q/F expressions, routers, type stubs
       │  PyO3
-ormpi-py/         Rust extension module: models, QuerySet, value conversion, async runtime
+piorm-py/         Rust extension module: models, QuerySet, value conversion, async runtime
       │
-ormpi-core/       Rust core: query state, filters, joins, aggregates, migrations,
+piorm-core/       Rust core: query state, filters, joins, aggregates, migrations,
       │           field types, connection pools
       ├── sea-query   SQL building for SQLite, PostgreSQL and MySQL
       └── sqlx        async drivers
-ormpi-cli/        Rust CLI for migrations and introspection
+piorm-cli/        Rust CLI for migrations and introspection
 ```
 
 The Python layer stays thin. A `QuerySet` collects its state in Rust, and Rust turns it into one SQL statement only when it is awaited. Python and Rust are built together into one wheel with [maturin](https://www.maturin.rs).
 
 ## Benchmarks
 
-`benchmark/` compares CRUD throughput for ormpi, Django ORM and SQLAlchemy on the same schema:
+`benchmark/` compares CRUD throughput for piorm, Django ORM and SQLAlchemy on the same schema:
 
 ```bash
 cd benchmark

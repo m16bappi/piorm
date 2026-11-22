@@ -1,7 +1,7 @@
 # Modern Transaction Patterns for Async-First ORMs
 
 > Research covering SQLAlchemy 2.0, SeaORM, Tortoise ORM, Prisma, Piccolo, MikroORM,
-> and the underlying sqlx Executor/Acquire primitives — with a focus on what ormpi
+> and the underlying sqlx Executor/Acquire primitives — with a focus on what piorm
 > should adopt.
 
 ---
@@ -521,12 +521,12 @@ Python equivalent: `__aexit__` on the transaction context manager calls
 
 ---
 
-## 12. Synthesis — What ormpi Should Adopt
+## 12. Synthesis — What piorm Should Adopt
 
 ### Rust core layer
 
 1. **`ConnectionTrait` / `ExecutorRef` abstraction** (SeaORM model)
-   - `OrmpiPool` and `OrmpiTransaction` both implement a common `Connectable` trait
+   - `PiormPool` and `PiormTransaction` both implement a common `Connectable` trait
    - All operation functions (`save_instance`, `delete_instance`, etc.) accept
      `&dyn Connectable` — no signature change needed when adding transactions
 
@@ -547,7 +547,7 @@ Python equivalent: `__aexit__` on the transaction context manager calls
    - `transaction()` called on a `DatabaseTransaction` issues `SAVEPOINT`
    - Never issues nested `BEGIN`
 
-5. **Drop-based rollback** — uncommitted `OrmpiTransaction` rolls back
+5. **Drop-based rollback** — uncommitted `PiormTransaction` rolls back
    automatically on drop (spawns Tokio local task for async `ROLLBACK`).
 
 6. **Remove `unsafe transmute`** — hold the pool alive separately and let sqlx
@@ -557,14 +557,14 @@ Python equivalent: `__aexit__` on the transaction context manager calls
 
 1. **`async with atomic() as txn`** — explicit style, `txn` passed to operations
    ```python
-   async with ormpi.atomic() as txn:
+   async with piorm.atomic() as txn:
        await obj1.asave(using=txn)
        await obj2.asave(using=txn)
    ```
 
 2. **`@atomic()` decorator + `ContextVar` ambient** — zero-signature-change style
    ```python
-   @ormpi.atomic()
+   @piorm.atomic()
    async def transfer(from_id, to_id, amount):
        src = await Account.objects.select_for_update().get(id=from_id)
        dst = await Account.objects.get(id=to_id)
@@ -580,7 +580,7 @@ Python equivalent: `__aexit__` on the transaction context manager calls
 4. **`REQUIRES_NEW` escape hatch** — for audit logs and notifications that must
    commit independently:
    ```python
-   @ormpi.atomic(propagation="requires_new")
+   @piorm.atomic(propagation="requires_new")
    async def log_event(event):
        await AuditLog.create(**event)
    ```
@@ -603,7 +603,7 @@ Python equivalent: `__aexit__` on the transaction context manager calls
 Python API Layer
 ┌──────────────────────────────────────────────────────────┐
 │  @atomic()  / async with atomic() as txn                 │
-│  ContextVar stores active OrmpiTransaction               │
+│  ContextVar stores active PiormTransaction               │
 │  auto savepoint on nested atomic()                       │
 └──────────────────┬───────────────────────────────────────┘
                    │ calls into PyO3 bindings
@@ -614,10 +614,10 @@ Rust Core Layer
 │  fetch_instance(exec: &dyn Connectable, ...)             │
 │                                                          │
 │  Connectable                                             │
-│  ├── OrmpiPool        → acquires from sqlx Pool          │
-│  └── OrmpiTransaction → uses borrowed sqlx Transaction   │
+│  ├── PiormPool        → acquires from sqlx Pool          │
+│  └── PiormTransaction → uses borrowed sqlx Transaction   │
 │                                                          │
-│  OrmpiTransaction                                        │
+│  PiormTransaction                                        │
 │  ├── begin()      → BEGIN                                │
 │  ├── savepoint()  → SAVEPOINT sp_N                       │
 │  ├── commit()     → COMMIT                               │

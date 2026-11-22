@@ -3,7 +3,7 @@ requires = ["maturin>=1.7,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "ormpi"
+name = "piorm"
 version = "0.1.0"
 description = "A Django-like async ORM for Python, built on Rust with sea-query + sqlx"
 readme = "README.md"
@@ -28,7 +28,7 @@ classifiers = [
 ]
 
 [project.scripts]
-ormpi = "ormpi._cli:main"
+piorm = "piorm._cli:main"
 
 [project.optional-dependencies]
 test = [
@@ -71,10 +71,10 @@ cache-keys = [{ git = true }, { file = "Cargo.lock" }]
 # ── maturin configuration ─────────────────────────────────────────────────────
 
 [tool.maturin]
-manifest-path = "ormpi-py/Cargo.toml"
+manifest-path = "piorm-py/Cargo.toml"
 python-source = "python"
 features = ["pyo3/extension-module"]
-module-name = "ormpi._core"
+module-name = "piorm._core"
 
 # ── pytest ────────────────────────────────────────────────────────────────────
 
@@ -94,14 +94,14 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["ormpi"]
+known-first-party = ["piorm"]
 
 # ── mypy ─────────────────────────────────────────────────────────────────────
 
 [tool.mypy]
 strict = true
 python_version = "3.12"
-packages = ["ormpi"]
+packages = ["piorm"]
 
 # ── pyright ───────────────────────────────────────────────────────────────────
 

@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "ormpi-core",
-    "ormpi-py",
-    "ormpi-cli",
+    "piorm-core",
+    "piorm-py",
+    "piorm-cli",
 ]
 exclude = ["sea-query"]
 

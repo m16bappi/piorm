@@ -1,5 +1,5 @@
 """
-Comprehensive read tests for ormpi QuerySet.
+Comprehensive read tests for piorm QuerySet.
 
 Covers every retrieval path:
   - get / filter / exclude / all / none
@@ -27,9 +27,9 @@ Covers every retrieval path:
 import pytest
 import pytest_asyncio
 
-import ormpi
-from ormpi.exceptions import DoesNotExist, MultipleObjectsReturned
-from ormpi.expr import Avg, Count, F, Max, Min, Q, Sum
+import piorm
+from piorm.exceptions import DoesNotExist, MultipleObjectsReturned
+from piorm.expr import Avg, Count, F, Max, Min, Q, Sum
 
 from __tests__.conftest import Article, Author, Tag
 
@@ -760,7 +760,7 @@ class TestSelectRelated:
 
         articles = await Article.objects.select_related("author")
         assert len(articles) == 1
-        cached = articles[0]._values.get("author") or getattr(articles[0], "_ormpi_cache_author", None)
+        cached = articles[0]._values.get("author") or getattr(articles[0], "_piorm_cache_author", None)
         assert cached is not None
 
     @pytest.mark.asyncio
@@ -864,7 +864,7 @@ class TestRawSQL:
     @pytest.mark.asyncio
     async def test_execute_raw_returns_rows(self):
         await Author.objects.create(name="Alice", email="alice@test.com")
-        rows = await ormpi.execute_raw("SELECT name FROM authors")
+        rows = await piorm.execute_raw("SELECT name FROM authors")
         assert len(rows) == 1
 
 

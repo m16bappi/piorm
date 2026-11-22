@@ -1,5 +1,5 @@
 """
-Comprehensive update tests for ormpi.
+Comprehensive update tests for piorm.
 
 Covers every mutation path that modifies existing rows:
   - QuerySet.update()        — single/multi field, filtered, all, Q objects,
@@ -17,8 +17,8 @@ Covers every mutation path that modifies existing rows:
 
 import pytest
 
-import ormpi
-from ormpi.expr import F, Q
+import piorm
+from piorm.expr import F, Q
 
 from __tests__.conftest import Article, Author, Tag
 

@@ -1,5 +1,5 @@
 """
-CRUD Benchmark Runner: ormpi vs Django ORM vs SQLAlchemy
+CRUD Benchmark Runner: piorm vs Django ORM vs SQLAlchemy
 
 Usage:
     cd benchmark/
@@ -17,12 +17,12 @@ from bench_config import BenchResult, print_results
 console = Console()
 
 
-def run_ormpi() -> BenchResult:
-    from bench_ormpi import setup, teardown, run as bench_run
+def run_piorm() -> BenchResult:
+    from bench_piorm import setup, teardown, run as bench_run
 
-    console.print("  [bold blue]Setting up ormpi...[/bold blue]")
+    console.print("  [bold blue]Setting up piorm...[/bold blue]")
     setup()
-    console.print("  [bold blue]Benchmarking ormpi...[/bold blue]")
+    console.print("  [bold blue]Benchmarking piorm...[/bold blue]")
     result = bench_run()
     teardown()
     return result
@@ -51,12 +51,12 @@ def run_sqlalchemy() -> BenchResult:
 
 
 def main():
-    console.print("\n[bold]  CRUD Benchmark: ormpi vs Django ORM vs SQLAlchemy[/bold]")
+    console.print("\n[bold]  CRUD Benchmark: piorm vs Django ORM vs SQLAlchemy[/bold]")
     console.print("  [dim]Each operation is timed over 10 rounds (median reported)[/dim]\n")
 
     results = []
 
-    results.append(run_ormpi())
+    results.append(run_piorm())
     results.append(run_django())
     results.append(run_sqlalchemy())
 

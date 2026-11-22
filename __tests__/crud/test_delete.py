@@ -1,5 +1,5 @@
 """
-Comprehensive delete tests for ormpi.
+Comprehensive delete tests for piorm.
 
 Covers every deletion path:
   - Instance.delete()     — removes row, returns (count, breakdown),
@@ -15,10 +15,10 @@ Covers every deletion path:
 
 import pytest
 
-import ormpi
-from ormpi.exceptions import IntegrityError
-from ormpi.expr import Q
-from ormpi.fields import (
+import piorm
+from piorm.exceptions import IntegrityError
+from piorm.expr import Q
+from piorm.fields import (
     CASCADE,
     DO_NOTHING,
     ForeignKey,
@@ -34,7 +34,7 @@ from __tests__.conftest import Article, Author, Tag
 # Extra models for FK-behaviour tests
 # ---------------------------------------------------------------------------
 
-class NullableChild(ormpi.Model):
+class NullableChild(piorm.Model):
     """FK with SET_NULL — parent delete nullifies this column."""
     title  = CharField(max_length=100)
     author = ForeignKey("Author", on_delete=SET_NULL, null=True)
@@ -271,17 +271,17 @@ class TestCascadeDelete:
 class TestSetNullDelete:
     @pytest.mark.asyncio
     async def test_set_null_nullifies_fk_on_parent_delete(self):
-        await ormpi.execute_raw(
+        await piorm.execute_raw(
             "CREATE TABLE IF NOT EXISTS nullable_children "
             "(id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, author_id INTEGER)"
         )
         author = await make_author()
-        await ormpi.execute_raw(
+        await piorm.execute_raw(
             "INSERT INTO nullable_children (title, author_id) VALUES (?, ?)",
             ["Child", author.pk],
         )
         await author.delete()
-        rows = await ormpi.execute_raw(
+        rows = await piorm.execute_raw(
             "SELECT author_id FROM nullable_children WHERE title = ?", ["Child"]
         )
         assert rows[0][0] is None

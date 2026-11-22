@@ -60,7 +60,7 @@ def timeit_async(fn: Callable, rounds: int = NUM_ROUNDS, warmup: int = NUM_WARMU
 
 
 def print_results(results: List[BenchResult]):
-    table = Table(title="\n  CRUD Benchmark: ormpi vs Django ORM vs SQLAlchemy  ", show_lines=True)
+    table = Table(title="\n  CRUD Benchmark: piorm vs Django ORM vs SQLAlchemy  ", show_lines=True)
     table.add_column("Operation", style="bold cyan", min_width=20)
     for r in results:
         table.add_column(r.name, justify="right", min_width=14)

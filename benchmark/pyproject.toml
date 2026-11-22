@@ -1,7 +1,7 @@
 [project]
-name = "ormpi-benchmarks"
+name = "piorm-benchmarks"
 version = "0.1.0"
-description = "CRUD benchmarks: ormpi vs Django ORM vs SQLAlchemy"
+description = "CRUD benchmarks: piorm vs Django ORM vs SQLAlchemy"
 requires-python = ">=3.10"
 dependencies = [
     "django>=5.0",

@@ -1,5 +1,5 @@
 """
-Comprehensive write tests for ormpi QuerySet / Model.
+Comprehensive write tests for piorm QuerySet / Model.
 
 Covers every mutation path:
   - create() — basic, with defaults, with FK, with null fields
@@ -12,14 +12,14 @@ Covers every mutation path:
   - bulk_update()  — basic, subset of fields, batch_size
   - F() expressions in update
   - dirty tracking — only dirty fields sent on save()
-  - Instance state — pk assigned after save, _ormpi_state["adding"] flip
+  - Instance state — pk assigned after save, _piorm_state["adding"] flip
 """
 
 import pytest
 
-import ormpi
-from ormpi.exceptions import IntegrityError
-from ormpi.expr import F
+import piorm
+from piorm.exceptions import IntegrityError
+from piorm.expr import F
 
 from __tests__.conftest import Article, Author, Tag
 

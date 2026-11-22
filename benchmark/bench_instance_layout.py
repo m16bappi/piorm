@@ -1,7 +1,7 @@
 """
 benchmark/bench_instance_layout.py
 
-Measures per-instance memory overhead of ormpi model instances.
+Measures per-instance memory overhead of piorm model instances.
 Run with: python benchmark/bench_instance_layout.py
 
 Expected output (Phase 14 target):
@@ -12,9 +12,9 @@ import gc
 import timeit
 import tracemalloc
 
-import ormpi  # noqa: F401
-from ormpi.models import Model
-from ormpi.fields import CharField, IntegerField
+import piorm  # noqa: F401
+from piorm.models import Model
+from piorm.fields import CharField, IntegerField
 
 
 class Article(Model):

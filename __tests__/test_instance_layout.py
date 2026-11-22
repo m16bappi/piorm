@@ -6,8 +6,8 @@ requiring a live database connection.
 """
 import sys
 import pytest
-from ormpi.models import Model
-from ormpi.fields import CharField, IntegerField
+from piorm.models import Model
+from piorm.fields import CharField, IntegerField
 
 
 class LayoutArticle(Model):
